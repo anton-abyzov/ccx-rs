@@ -1,9 +1,10 @@
-/// Core agent loop — placeholder for Phase 2 implementation.
-///
-/// Will contain:
-/// - Main query loop: message -> API -> tool_use -> execute -> loop
-/// - Tool registry with dynamic MCP tools
-/// - Streaming output rendering
+pub mod agent_loop;
+pub mod context;
+pub mod tool;
+
+pub use agent_loop::{AgentCallback, AgentLoop, AgentLoopError, NoopCallback};
+pub use context::ToolContext;
+pub use tool::{Tool, ToolError, ToolRegistry, ToolResult};
 
 pub fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
