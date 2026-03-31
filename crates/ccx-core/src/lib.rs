@@ -1,11 +1,15 @@
 pub mod agent;
 pub mod agent_loop;
 pub mod context;
+pub mod cost;
+pub mod hooks;
 pub mod tool;
 
 pub use agent::{AgentDef, AgentError, AgentManager, AgentMessage, AgentResult};
 pub use agent_loop::{AgentCallback, AgentLoop, AgentLoopError, NoopCallback};
 pub use context::ToolContext;
+pub use cost::CostTracker;
+pub use hooks::{Hook, HookEvent, HookRegistry, HookResult};
 pub use tool::{Tool, ToolError, ToolRegistry, ToolResult};
 
 pub fn version() -> &'static str {
