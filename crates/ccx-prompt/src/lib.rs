@@ -1,32 +1,12 @@
 pub mod claudemd;
+pub mod system;
 
 pub use claudemd::{discover_claude_md, ClaudeMdFile};
+pub use system::{build_full_system_prompt, ToolSchema};
 
-/// Build the system prompt from components.
+/// Build the system prompt from components (legacy simple version).
 pub fn build_system_prompt(claude_md_files: &[ClaudeMdFile], working_dir: &str) -> String {
-    let mut parts = Vec::new();
-
-    parts.push(
-        "You are an AI coding assistant. You help users with software engineering tasks."
-            .to_string(),
-    );
-    parts.push(format!(
-        "\n\n# Environment\n- Working directory: {working_dir}\n- Platform: {}\n",
-        std::env::consts::OS
-    ));
-
-    if !claude_md_files.is_empty() {
-        parts.push("\n# User Instructions\n".to_string());
-        for file in claude_md_files {
-            parts.push(format!(
-                "Contents of {}:\n\n{}\n",
-                file.path.display(),
-                file.content
-            ));
-        }
-    }
-
-    parts.join("")
+    build_full_system_prompt(claude_md_files, working_dir, &[])
 }
 
 #[cfg(test)]

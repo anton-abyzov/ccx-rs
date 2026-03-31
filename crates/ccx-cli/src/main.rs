@@ -75,7 +75,7 @@ fn print_info() {
     println!("  ccx-api        - Claude API client with streaming");
     println!("  ccx-auth       - API key resolution");
     println!("  ccx-core       - Agent loop, tools, hooks, cost tracking");
-    println!("  ccx-tools      - Built-in tools (Bash, Read, Write, Edit, Glob, Grep, WebFetch)");
+    println!("  ccx-tools      - Built-in tools (Bash, Read, Write, Edit, Glob, Grep, WebFetch, WebSearch, Agent, TodoWrite, NotebookEdit)");
     println!("  ccx-prompt     - System prompt + CLAUDE.md");
     println!("  ccx-permission - Permission modes and rules");
     println!("  ccx-config     - Settings loading");
@@ -115,11 +115,24 @@ async fn run_chat(
     let mut registry = ccx_core::ToolRegistry::new();
     ccx_tools::register_all(&mut registry);
 
-    // Build system prompt.
+    // Build system prompt with tool schemas.
     let cwd = std::env::current_dir()?;
     let claude_md_files = ccx_prompt::discover_claude_md(&cwd);
-    let system_prompt =
-        ccx_prompt::build_system_prompt(&claude_md_files, &cwd.to_string_lossy());
+    let tool_schemas: Vec<ccx_prompt::ToolSchema> = registry
+        .names()
+        .iter()
+        .filter_map(|name| {
+            registry.get(name).map(|t| ccx_prompt::ToolSchema {
+                name: t.name().to_string(),
+                description: t.description().to_string(),
+            })
+        })
+        .collect();
+    let system_prompt = ccx_prompt::build_full_system_prompt(
+        &claude_md_files,
+        &cwd.to_string_lossy(),
+        &tool_schemas,
+    );
 
     // Print startup info.
     match &resolved.source {
@@ -341,6 +354,26 @@ impl ccx_core::AgentCallback for StreamCallback {
                 .as_str()
                 .unwrap_or("")
                 .to_string(),
+            "WebSearch" => input["query"]
+                .as_str()
+                .unwrap_or("")
+                .to_string(),
+            "Agent" => input["description"]
+                .as_str()
+                .unwrap_or("")
+                .to_string(),
+            "TodoWrite" => {
+                let count = input["todos"]
+                    .as_array()
+                    .map(|a| a.len())
+                    .unwrap_or(0);
+                format!("{count} items")
+            }
+            "NotebookEdit" => {
+                let path = input["notebook_path"].as_str().unwrap_or("");
+                let idx = input["cell_index"].as_u64().unwrap_or(0);
+                format!("{path} cell {idx}")
+            }
             _ => String::new(),
         };
 

@@ -1,18 +1,26 @@
+pub mod agent_tool;
 pub mod bash;
 pub mod file_edit;
 pub mod file_read;
 pub mod file_write;
 pub mod glob_tool;
 pub mod grep;
+pub mod notebook_edit;
+pub mod todo_write;
 pub mod web_fetch;
+pub mod web_search;
 
+pub use agent_tool::AgentTool;
 pub use bash::BashTool;
 pub use file_edit::FileEditTool;
 pub use file_read::FileReadTool;
 pub use file_write::FileWriteTool;
 pub use glob_tool::GlobTool;
 pub use grep::GrepTool;
+pub use notebook_edit::NotebookEditTool;
+pub use todo_write::TodoWriteTool;
 pub use web_fetch::WebFetchTool;
+pub use web_search::WebSearchTool;
 
 /// Register all built-in tools into a registry.
 pub fn register_all(registry: &mut ccx_core::ToolRegistry) {
@@ -23,6 +31,10 @@ pub fn register_all(registry: &mut ccx_core::ToolRegistry) {
     registry.register(Box::new(GlobTool));
     registry.register(Box::new(GrepTool));
     registry.register(Box::new(WebFetchTool));
+    registry.register(Box::new(WebSearchTool));
+    registry.register(Box::new(AgentTool));
+    registry.register(Box::new(TodoWriteTool));
+    registry.register(Box::new(NotebookEditTool));
 }
 
 #[cfg(test)]
@@ -40,5 +52,16 @@ mod tests {
         assert!(registry.get("Glob").is_some());
         assert!(registry.get("Grep").is_some());
         assert!(registry.get("WebFetch").is_some());
+        assert!(registry.get("WebSearch").is_some());
+        assert!(registry.get("Agent").is_some());
+        assert!(registry.get("TodoWrite").is_some());
+        assert!(registry.get("NotebookEdit").is_some());
+    }
+
+    #[test]
+    fn test_register_all_count() {
+        let mut registry = ccx_core::ToolRegistry::new();
+        register_all(&mut registry);
+        assert_eq!(registry.names().len(), 11);
     }
 }
