@@ -2,6 +2,20 @@
 
 A Rust implementation of an AI coding assistant CLI. 20MB static binary, 5ms startup, OS-native sandboxing. Built on top of OpenAI Codex's Apache-2.0 infrastructure crates.
 
+## Backstory
+
+On March 31, 2026, security researcher Chaofan Shou ([@Fried_rice](https://x.com/Fried_rice/status/2038894956459290963)) discovered that Anthropic's npm package `@anthropic-ai/claude-code` shipped with a 57MB source map file (`cli.js.map`), exposing the full TypeScript source -- 512,000 lines across 1,900+ files -- completely unobfuscated.
+
+What the architecture analysis uncovered was impressive engineering: 43 built-in tools, 4-layer context compression, multi-agent orchestration, MCP protocol, a permission DSL, and undocumented features (BUDDY AI pet, KAIROS daemon mode, Auto-Dream memory consolidation). Full analysis: [verified-skill.com/insights/claude-code](https://verified-skill.com/insights/claude-code).
+
+The CCX project emerged from this discovery. Rust was the performance play -- if you're going to rewrite a 114MB Node.js CLI, do it in the language that gave us ripgrep, bat, fd, and delta. ccx-rs builds on OpenAI Codex's Apache-2.0 crate ecosystem (sandbox, TUI, MCP, exec) and adds the Claude-specific layer on top: API streaming, 4-layer compression, memory persistence, and the full tool system.
+
+Unlike [instructkr/claw-code](https://github.com/instructkr/claw-code) (41.7k stars), which wraps Claude Code in a Python harness, ccx-rs is a ground-up Rust implementation with real tool execution, OS-native sandboxing, and a comprehensive test suite.
+
+- Original tweet: https://x.com/Fried_rice/status/2038894956459290963
+- Architecture analysis: https://verified-skill.com/insights/claude-code
+- CCX umbrella: https://github.com/anton-abyzov/ccx
+
 ## Why Rust?
 
 - **20MB static binary** vs 114MB npm package -- zero runtime dependencies
