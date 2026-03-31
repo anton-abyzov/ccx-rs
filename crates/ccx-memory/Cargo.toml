@@ -1,0 +1,11 @@
+[package]
+name = "ccx-memory"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "File-based memory system for ccx"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

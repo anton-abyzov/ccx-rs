@@ -6,6 +6,9 @@ members = [
     "crates/ccx-auth",
     "crates/ccx-tools",
     "crates/ccx-prompt",
+    "crates/ccx-permission",
+    "crates/ccx-config",
+    "crates/ccx-memory",
 ]
 resolver = "2"
 

@@ -1,0 +1,12 @@
+[package]
+name = "ccx-config"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Configuration and settings loading for ccx"
+
+[dependencies]
+ccx-permission = { path = "../ccx-permission" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

@@ -144,6 +144,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ccx-config"
+version = "0.1.0"
+dependencies = [
+ "ccx-permission",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "ccx-core"
 version = "0.1.0"
 dependencies = [
@@ -154,6 +164,25 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tokio",
+]
+
+[[package]]
+name = "ccx-memory"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "ccx-permission"
+version = "0.1.0"
+dependencies = [
+ "glob",
+ "serde",
+ "serde_json",
+ "thiserror",
 ]
 
 [[package]]
