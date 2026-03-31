@@ -1,4 +1,4 @@
-# claude-code-rs -- Implementation Spec
+# ccx-rs -- Implementation Spec
 
 ## Strategy: Fork Codex Crates + Build Claude Layer
 

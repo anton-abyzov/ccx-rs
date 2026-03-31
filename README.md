@@ -1,4 +1,4 @@
-# claude-code-rs
+# ccx-rs
 
 A Rust implementation of an AI coding assistant CLI. 20MB static binary, 5ms startup, OS-native sandboxing. Built on top of OpenAI Codex's Apache-2.0 infrastructure crates.
 
@@ -80,14 +80,14 @@ crates/
 ## Getting Started
 
 ```sh
-cargo install claude-code-rs
+cargo install ccx-rs
 ```
 
 ## Development
 
 ```sh
-git clone https://github.com/anton-abyzov/claude-code-rs.git
-cd claude-code-rs
+git clone https://github.com/anton-abyzov/ccx-rs.git
+cd ccx-rs
 cargo build
 cargo test
 ```
