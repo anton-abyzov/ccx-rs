@@ -9,6 +9,9 @@ members = [
     "crates/ccx-permission",
     "crates/ccx-config",
     "crates/ccx-memory",
+    "crates/ccx-compact",
+    "crates/ccx-mcp",
+    "crates/ccx-skill",
 ]
 resolver = "2"
 

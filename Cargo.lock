@@ -144,6 +144,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ccx-compact"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "ccx-config"
 version = "0.1.0"
 dependencies = [
@@ -160,6 +169,16 @@ dependencies = [
  "async-trait",
  "ccx-api",
  "futures",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
+name = "ccx-mcp"
+version = "0.1.0"
+dependencies = [
  "serde",
  "serde_json",
  "thiserror",
@@ -187,6 +206,15 @@ dependencies = [
 
 [[package]]
 name = "ccx-prompt"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "ccx-skill"
 version = "0.1.0"
 dependencies = [
  "serde",
