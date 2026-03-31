@@ -11,5 +11,4 @@
 .DS_Store
 Thumbs.db
 
-# Cargo
-Cargo.lock
+# Cargo (Cargo.lock committed for reproducible binary builds)

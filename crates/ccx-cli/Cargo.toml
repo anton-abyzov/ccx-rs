@@ -1,0 +1,18 @@
+[package]
+name = "ccx-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "CLI entry point for ccx"
+
+[[bin]]
+name = "ccx"
+path = "src/main.rs"
+
+[dependencies]
+ccx-api = { path = "../ccx-api" }
+ccx-auth = { path = "../ccx-auth" }
+ccx-core = { path = "../ccx-core" }
+clap = { workspace = true }
+tokio = { workspace = true }
+futures = { workspace = true }

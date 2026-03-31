@@ -1,0 +1,222 @@
+use std::pin::Pin;
+
+use futures::stream::{self, BoxStream, Stream, StreamExt};
+use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE};
+use reqwest::StatusCode;
+
+use crate::error::Error;
+use crate::types::{MessageRequest, StreamEvent};
+
+const API_BASE: &str = "https://api.anthropic.com/v1";
+const API_VERSION: &str = "2023-06-01";
+
+/// Claude API client for streaming message requests.
+pub struct ClaudeClient {
+    http: reqwest::Client,
+    api_key: String,
+    model: String,
+}
+
+impl ClaudeClient {
+    /// Create a new client with the given API key and default model.
+    pub fn new(api_key: impl Into<String>, model: impl Into<String>) -> Self {
+        Self {
+            http: reqwest::Client::new(),
+            api_key: api_key.into(),
+            model: model.into(),
+        }
+    }
+
+    /// Returns the configured model.
+    pub fn model(&self) -> &str {
+        &self.model
+    }
+
+    /// Send a streaming message request and return a stream of events.
+    pub async fn stream_message(
+        &self,
+        mut req: MessageRequest,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamEvent, Error>> + Send>>, Error> {
+        // Override model and ensure streaming is on.
+        req.model = self.model.clone();
+        req.stream = Some(true);
+
+        let mut headers = HeaderMap::new();
+        headers.insert("x-api-key", HeaderValue::from_str(&self.api_key).unwrap());
+        headers.insert(
+            "anthropic-version",
+            HeaderValue::from_static(API_VERSION),
+        );
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+
+        let response = self
+            .http
+            .post(format!("{API_BASE}/messages"))
+            .headers(headers)
+            .json(&req)
+            .send()
+            .await?;
+
+        let status = response.status();
+
+        if status == StatusCode::UNAUTHORIZED {
+            return Err(Error::Auth("invalid API key".into()));
+        }
+        if status == StatusCode::TOO_MANY_REQUESTS {
+            let retry_after = response
+                .headers()
+                .get("retry-after")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.parse().ok());
+            return Err(Error::RateLimit {
+                retry_after_secs: retry_after,
+            });
+        }
+        if status == StatusCode::from_u16(529).unwrap() {
+            return Err(Error::Overloaded);
+        }
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(Error::Api {
+                status: status.as_u16(),
+                body,
+            });
+        }
+
+        let byte_stream = response.bytes_stream();
+
+        Ok(Box::pin(parse_sse_stream(byte_stream)))
+    }
+}
+
+/// Parse a byte stream of SSE into typed StreamEvents.
+fn parse_sse_stream(
+    byte_stream: impl Stream<Item = Result<bytes::Bytes, reqwest::Error>> + Send + 'static,
+) -> impl Stream<Item = Result<StreamEvent, Error>> + Send {
+    let line_stream: BoxStream<'static, Result<String, reqwest::Error>> =
+        byte_stream_to_lines(byte_stream).boxed();
+
+    stream::unfold(
+        (line_stream, String::new(), String::new()),
+        |(mut lines, mut event_type, mut data_buf)| async move {
+            loop {
+                match lines.next().await {
+                    None => return None,
+                    Some(Err(e)) => {
+                        return Some((Err(Error::Http(e)), (lines, event_type, data_buf)));
+                    }
+                    Some(Ok(line)) => {
+                        if line.is_empty() {
+                            // End of event — dispatch if we have data.
+                            if !data_buf.is_empty() {
+                                let result = serde_json::from_str::<StreamEvent>(&data_buf)
+                                    .map_err(|e| Error::SseParse(format!("{e}: {data_buf}")));
+                                event_type.clear();
+                                data_buf.clear();
+                                return Some((result, (lines, event_type, data_buf)));
+                            }
+                            continue;
+                        }
+                        if let Some(stripped) = line.strip_prefix("event: ") {
+                            event_type = stripped.to_string();
+                        } else if let Some(stripped) = line.strip_prefix("data: ") {
+                            if !data_buf.is_empty() {
+                                data_buf.push('\n');
+                            }
+                            data_buf.push_str(stripped);
+                        }
+                        // Ignore other SSE fields (id:, retry:, comments).
+                    }
+                }
+            }
+        },
+    )
+}
+
+/// Convert a byte stream into a stream of lines.
+fn byte_stream_to_lines(
+    byte_stream: impl Stream<Item = Result<bytes::Bytes, reqwest::Error>> + Send + 'static,
+) -> impl Stream<Item = Result<String, reqwest::Error>> + Send {
+    let boxed: BoxStream<'static, Result<bytes::Bytes, reqwest::Error>> = byte_stream.boxed();
+
+    stream::unfold(
+        (boxed, String::new()),
+        |(mut bytes, mut buf)| async move {
+            loop {
+                if let Some(pos) = buf.find('\n') {
+                    let line = buf[..pos].trim_end_matches('\r').to_string();
+                    buf = buf[pos + 1..].to_string();
+                    return Some((Ok(line), (bytes, buf)));
+                }
+                match bytes.next().await {
+                    None => {
+                        if buf.is_empty() {
+                            return None;
+                        }
+                        let line = std::mem::take(&mut buf);
+                        return Some((Ok(line), (bytes, buf)));
+                    }
+                    Some(Err(e)) => return Some((Err(e), (bytes, buf))),
+                    Some(Ok(chunk)) => {
+                        buf.push_str(&String::from_utf8_lossy(&chunk));
+                    }
+                }
+            }
+        },
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures::StreamExt;
+
+    #[test]
+    fn test_client_new() {
+        let client = ClaudeClient::new("test-key", "claude-sonnet-4-6");
+        assert_eq!(client.model(), "claude-sonnet-4-6");
+    }
+
+    #[tokio::test]
+    async fn test_sse_parsing() {
+        let raw = "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_01\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"claude-sonnet-4-6\",\"stop_reason\":null,\"usage\":null}}\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hello\"}}\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"input_tokens\":10,\"output_tokens\":5}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
+
+        let byte_stream = stream::iter(vec![Ok(bytes::Bytes::from(raw))]);
+        let mut event_stream = Box::pin(parse_sse_stream(byte_stream));
+        let mut events = Vec::new();
+        while let Some(event) = event_stream.next().await {
+            events.push(event.unwrap());
+        }
+
+        assert_eq!(events.len(), 6);
+        assert!(matches!(events[0], StreamEvent::MessageStart { .. }));
+        assert!(matches!(events[1], StreamEvent::ContentBlockStart { .. }));
+        assert!(matches!(events[2], StreamEvent::ContentBlockDelta { .. }));
+        assert!(matches!(events[3], StreamEvent::ContentBlockStop { .. }));
+        assert!(matches!(events[4], StreamEvent::MessageDelta { .. }));
+        assert!(matches!(events[5], StreamEvent::MessageStop));
+    }
+
+    #[test]
+    fn test_message_request_serialization() {
+        use crate::types::{InputMessage, MessageContent, Role};
+
+        let req = MessageRequest {
+            model: "claude-sonnet-4-6".into(),
+            max_tokens: 1024,
+            messages: vec![InputMessage {
+                role: Role::User,
+                content: MessageContent::Text("Hello".into()),
+            }],
+            system: None,
+            temperature: None,
+            tools: None,
+            stream: Some(true),
+        };
+
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["model"], "claude-sonnet-4-6");
+        assert_eq!(json["max_tokens"], 1024);
+        assert!(json.get("system").is_none());
+    }
+}
