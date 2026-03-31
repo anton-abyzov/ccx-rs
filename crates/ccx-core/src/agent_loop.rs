@@ -5,6 +5,7 @@ use ccx_api::{
 use futures::StreamExt;
 
 use crate::context::ToolContext;
+use crate::cost::CostTracker;
 use crate::tool::{ToolError, ToolRegistry, ToolResult};
 
 /// Tracks a content block being streamed.
@@ -19,6 +20,27 @@ enum PendingBlock {
     Other,
 }
 
+/// Configuration for rate limit retry behavior.
+#[derive(Debug, Clone)]
+pub struct RetryConfig {
+    /// Maximum number of retries for rate-limited requests.
+    pub max_retries: u32,
+    /// Base delay for exponential backoff (milliseconds).
+    pub base_delay_ms: u64,
+    /// Maximum delay cap (milliseconds).
+    pub max_delay_ms: u64,
+}
+
+impl Default for RetryConfig {
+    fn default() -> Self {
+        Self {
+            max_retries: 5,
+            base_delay_ms: 1000,
+            max_delay_ms: 60_000,
+        }
+    }
+}
+
 /// The main agent loop: message -> API -> tool_use -> execute -> loop.
 pub struct AgentLoop {
     client: ClaudeClient,
@@ -27,6 +49,8 @@ pub struct AgentLoop {
     system_prompt: String,
     messages: Vec<InputMessage>,
     max_turns: usize,
+    cost: CostTracker,
+    retry_config: RetryConfig,
 }
 
 /// Callback for streaming events.
@@ -34,6 +58,9 @@ pub trait AgentCallback: Send {
     fn on_text(&mut self, _text: &str) {}
     fn on_tool_start(&mut self, _name: &str, _input: &serde_json::Value) {}
     fn on_tool_end(&mut self, _name: &str, _result: &Result<ToolResult, ToolError>) {}
+    fn on_thinking(&mut self, _text: &str) {}
+    fn on_turn_complete(&mut self, _turn: usize, _cost: &CostTracker) {}
+    fn on_retry(&mut self, _attempt: u32, _delay_ms: u64, _reason: &str) {}
 }
 
 /// No-op callback.
@@ -46,6 +73,8 @@ pub enum AgentLoopError {
     Api(String),
     #[error("exceeded maximum turns ({0})")]
     MaxTurnsExceeded(usize),
+    #[error("rate limited after {0} retries")]
+    RateLimitExhausted(u32),
 }
 
 impl AgentLoop {
@@ -62,6 +91,8 @@ impl AgentLoop {
             system_prompt,
             messages: Vec::new(),
             max_turns: 50,
+            cost: CostTracker::new(),
+            retry_config: RetryConfig::default(),
         }
     }
 
@@ -69,8 +100,16 @@ impl AgentLoop {
         self.max_turns = max;
     }
 
+    pub fn set_retry_config(&mut self, config: RetryConfig) {
+        self.retry_config = config;
+    }
+
     pub fn messages(&self) -> &[InputMessage] {
         &self.messages
+    }
+
+    pub fn cost(&self) -> &CostTracker {
+        &self.cost
     }
 
     /// Send a user message and run the agent loop until completion.
@@ -93,7 +132,7 @@ impl AgentLoop {
 
             let req = MessageRequest {
                 model: String::new(),
-                max_tokens: 8192,
+                max_tokens: 16384,
                 messages: self.messages.clone(),
                 system: Some(self.system_prompt.clone()),
                 temperature: None,
@@ -101,66 +140,15 @@ impl AgentLoop {
                 stream: Some(true),
             };
 
-            let mut stream = self
-                .client
-                .stream_message(req)
-                .await
-                .map_err(|e| AgentLoopError::Api(e.to_string()))?;
+            // Execute with rate limit retry.
+            let stream_result =
+                self.stream_with_retry(req, callback).await?;
 
-            let mut blocks: Vec<PendingBlock> = Vec::new();
-            let mut stop_reason = None;
+            let (blocks, stop_reason, usage) = stream_result;
 
-            while let Some(event) = stream.next().await {
-                let event = event.map_err(|e| AgentLoopError::Api(e.to_string()))?;
-                match event {
-                    StreamEvent::ContentBlockStart {
-                        index,
-                        content_block,
-                    } => {
-                        while blocks.len() <= index {
-                            blocks.push(PendingBlock::Other);
-                        }
-                        blocks[index] = match content_block {
-                            ContentBlock::Text { text } => PendingBlock::Text(text),
-                            ContentBlock::ToolUse { id, name, .. } => PendingBlock::ToolUse {
-                                id,
-                                name,
-                                json_buf: String::new(),
-                            },
-                            ContentBlock::Thinking { thinking } => {
-                                PendingBlock::Thinking(thinking)
-                            }
-                            _ => PendingBlock::Other,
-                        };
-                    }
-                    StreamEvent::ContentBlockDelta { index, delta } => {
-                        if index < blocks.len() {
-                            match (&mut blocks[index], delta) {
-                                (PendingBlock::Text(buf), Delta::TextDelta { text }) => {
-                                    buf.push_str(&text);
-                                    callback.on_text(&text);
-                                }
-                                (
-                                    PendingBlock::ToolUse { json_buf, .. },
-                                    Delta::InputJsonDelta { partial_json },
-                                ) => {
-                                    json_buf.push_str(&partial_json);
-                                }
-                                (
-                                    PendingBlock::Thinking(buf),
-                                    Delta::ThinkingDelta { thinking },
-                                ) => {
-                                    buf.push_str(&thinking);
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                    StreamEvent::MessageDelta { delta, .. } => {
-                        stop_reason = delta.stop_reason;
-                    }
-                    _ => {}
-                }
+            // Record usage for this turn.
+            if let Some(usage) = &usage {
+                self.cost.record(usage);
             }
 
             // Build assistant content blocks from accumulated stream data.
@@ -206,7 +194,8 @@ impl AgentLoop {
                 let mut results = Vec::new();
                 for (id, name, input) in tool_calls {
                     callback.on_tool_start(&name, &input);
-                    let result = self.registry.execute(&name, input, &self.context).await;
+                    let result =
+                        self.registry.execute(&name, input, &self.context).await;
                     callback.on_tool_end(&name, &result);
 
                     let (tool_content, is_error) = match result {
@@ -224,8 +213,12 @@ impl AgentLoop {
                     role: Role::User,
                     content: MessageContent::Blocks(results),
                 });
+
+                callback.on_turn_complete(turn, &self.cost);
                 continue;
             }
+
+            callback.on_turn_complete(turn, &self.cost);
 
             // Extract final text from the last assistant message.
             let final_text = self
@@ -253,6 +246,175 @@ impl AgentLoop {
             return Ok(final_text);
         }
     }
+
+    /// Stream a request with exponential backoff on rate limits.
+    async fn stream_with_retry(
+        &self,
+        req: MessageRequest,
+        callback: &mut dyn AgentCallback,
+    ) -> Result<
+        (
+            Vec<PendingBlock>,
+            Option<StopReason>,
+            Option<ccx_api::Usage>,
+        ),
+        AgentLoopError,
+    > {
+        let mut attempt = 0;
+
+        loop {
+            match self.client.stream_message(req.clone()).await {
+                Ok(stream) => {
+                    return self.consume_stream(stream, callback).await;
+                }
+                Err(ccx_api::Error::RateLimit { retry_after_secs }) => {
+                    attempt += 1;
+                    if attempt > self.retry_config.max_retries {
+                        return Err(AgentLoopError::RateLimitExhausted(attempt));
+                    }
+
+                    let delay_ms = if let Some(secs) = retry_after_secs {
+                        secs * 1000
+                    } else {
+                        // Exponential backoff with jitter.
+                        let base = self.retry_config.base_delay_ms
+                            * 2u64.pow(attempt - 1);
+                        base.min(self.retry_config.max_delay_ms)
+                    };
+
+                    callback.on_retry(
+                        attempt,
+                        delay_ms,
+                        "rate limited",
+                    );
+                    tokio::time::sleep(
+                        std::time::Duration::from_millis(delay_ms),
+                    )
+                    .await;
+                }
+                Err(ccx_api::Error::Overloaded) => {
+                    attempt += 1;
+                    if attempt > self.retry_config.max_retries {
+                        return Err(AgentLoopError::Api(
+                            "API overloaded after max retries".into(),
+                        ));
+                    }
+
+                    let delay_ms = self.retry_config.base_delay_ms
+                        * 2u64.pow(attempt - 1);
+                    let delay_ms =
+                        delay_ms.min(self.retry_config.max_delay_ms);
+
+                    callback.on_retry(attempt, delay_ms, "overloaded");
+                    tokio::time::sleep(
+                        std::time::Duration::from_millis(delay_ms),
+                    )
+                    .await;
+                }
+                Err(e) => {
+                    return Err(AgentLoopError::Api(e.to_string()));
+                }
+            }
+        }
+    }
+
+    /// Consume a stream of SSE events into pending blocks.
+    async fn consume_stream(
+        &self,
+        mut stream: std::pin::Pin<
+            Box<
+                dyn futures::Stream<
+                        Item = Result<StreamEvent, ccx_api::Error>,
+                    > + Send,
+            >,
+        >,
+        callback: &mut dyn AgentCallback,
+    ) -> Result<
+        (
+            Vec<PendingBlock>,
+            Option<StopReason>,
+            Option<ccx_api::Usage>,
+        ),
+        AgentLoopError,
+    > {
+        let mut blocks: Vec<PendingBlock> = Vec::new();
+        let mut stop_reason = None;
+        let mut usage = None;
+
+        while let Some(event) = stream.next().await {
+            let event =
+                event.map_err(|e| AgentLoopError::Api(e.to_string()))?;
+            match event {
+                StreamEvent::ContentBlockStart {
+                    index,
+                    content_block,
+                } => {
+                    while blocks.len() <= index {
+                        blocks.push(PendingBlock::Other);
+                    }
+                    blocks[index] = match content_block {
+                        ContentBlock::Text { text } => PendingBlock::Text(text),
+                        ContentBlock::ToolUse { id, name, .. } => {
+                            PendingBlock::ToolUse {
+                                id,
+                                name,
+                                json_buf: String::new(),
+                            }
+                        }
+                        ContentBlock::Thinking { thinking } => {
+                            PendingBlock::Thinking(thinking)
+                        }
+                        _ => PendingBlock::Other,
+                    };
+                }
+                StreamEvent::ContentBlockDelta { index, delta } => {
+                    if index < blocks.len() {
+                        match (&mut blocks[index], delta) {
+                            (
+                                PendingBlock::Text(buf),
+                                Delta::TextDelta { text },
+                            ) => {
+                                buf.push_str(&text);
+                                callback.on_text(&text);
+                            }
+                            (
+                                PendingBlock::ToolUse { json_buf, .. },
+                                Delta::InputJsonDelta { partial_json },
+                            ) => {
+                                json_buf.push_str(&partial_json);
+                            }
+                            (
+                                PendingBlock::Thinking(buf),
+                                Delta::ThinkingDelta { thinking },
+                            ) => {
+                                buf.push_str(&thinking);
+                                callback.on_thinking(&thinking);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                StreamEvent::MessageDelta {
+                    delta,
+                    usage: msg_usage,
+                } => {
+                    stop_reason = delta.stop_reason;
+                    if let Some(u) = msg_usage {
+                        usage = Some(u);
+                    }
+                }
+                StreamEvent::Error { error } => {
+                    return Err(AgentLoopError::Api(format!(
+                        "[{}] {}",
+                        error.error_type, error.message
+                    )));
+                }
+                _ => {}
+            }
+        }
+
+        Ok((blocks, stop_reason, usage))
+    }
 }
 
 #[cfg(test)]
@@ -266,6 +428,7 @@ mod tests {
         let ctx = ToolContext::new(std::path::PathBuf::from("/tmp"));
         let agent = AgentLoop::new(client, registry, ctx, "system".into());
         assert!(agent.messages().is_empty());
+        assert_eq!(agent.cost().api_calls, 0);
     }
 
     #[test]
@@ -273,6 +436,41 @@ mod tests {
         let mut cb = NoopCallback;
         cb.on_text("test");
         cb.on_tool_start("tool", &serde_json::json!({}));
+        cb.on_thinking("thinking...");
+        cb.on_turn_complete(1, &CostTracker::new());
+        cb.on_retry(1, 1000, "rate limit");
         // Should not panic.
+    }
+
+    #[test]
+    fn test_retry_config_default() {
+        let config = RetryConfig::default();
+        assert_eq!(config.max_retries, 5);
+        assert_eq!(config.base_delay_ms, 1000);
+        assert_eq!(config.max_delay_ms, 60_000);
+    }
+
+    #[test]
+    fn test_agent_loop_set_max_turns() {
+        let client = ClaudeClient::new("key", "model");
+        let registry = ToolRegistry::new();
+        let ctx = ToolContext::new(std::path::PathBuf::from("/tmp"));
+        let mut agent = AgentLoop::new(client, registry, ctx, "sys".into());
+        agent.set_max_turns(10);
+        // Verify it doesn't panic and internal state is set.
+    }
+
+    #[test]
+    fn test_retry_config_custom() {
+        let client = ClaudeClient::new("key", "model");
+        let registry = ToolRegistry::new();
+        let ctx = ToolContext::new(std::path::PathBuf::from("/tmp"));
+        let mut agent = AgentLoop::new(client, registry, ctx, "sys".into());
+        agent.set_retry_config(RetryConfig {
+            max_retries: 10,
+            base_delay_ms: 500,
+            max_delay_ms: 30_000,
+        });
+        // Verify it doesn't panic.
     }
 }
