@@ -12,6 +12,7 @@ members = [
     "crates/ccx-compact",
     "crates/ccx-mcp",
     "crates/ccx-skill",
+    "crates/ccx-sandbox",
 ]
 resolver = "2"
 

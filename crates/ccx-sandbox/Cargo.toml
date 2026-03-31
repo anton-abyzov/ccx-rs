@@ -1,0 +1,11 @@
+[package]
+name = "ccx-sandbox"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Sandboxing for tool execution in ccx"
+
+[dependencies]
+tokio = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }

@@ -1,7 +1,9 @@
+pub mod agent;
 pub mod agent_loop;
 pub mod context;
 pub mod tool;
 
+pub use agent::{AgentDef, AgentError, AgentManager, AgentMessage, AgentResult};
 pub use agent_loop::{AgentCallback, AgentLoop, AgentLoopError, NoopCallback};
 pub use context::ToolContext;
 pub use tool::{Tool, ToolError, ToolRegistry, ToolResult};

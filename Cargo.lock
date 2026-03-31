@@ -214,6 +214,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ccx-sandbox"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "ccx-skill"
 version = "0.1.0"
 dependencies = [
