@@ -29,6 +29,9 @@ pub enum Error {
 
     #[error("SSE parse error: {0}")]
     SseParse(String),
+
+    #[error("invalid header value: {0}")]
+    InvalidHeader(String),
 }
 
 impl From<ApiErrorBody> for Error {

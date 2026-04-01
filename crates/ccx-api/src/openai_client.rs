@@ -31,9 +31,9 @@ impl OpenAiClient {
     pub fn openrouter(api_key: &str, model: &str) -> Self {
         Self {
             http: reqwest::Client::new(),
-            api_key: api_key.to_string(),
+            api_key: api_key.trim().to_string(),
             base_url: "https://openrouter.ai/api/v1".to_string(),
-            model: model.to_string(),
+            model: model.trim().to_string(),
         }
     }
 
@@ -67,10 +67,9 @@ impl OpenAiClient {
         }
 
         let mut headers = HeaderMap::new();
-        headers.insert(
-            "Authorization",
-            HeaderValue::from_str(&format!("Bearer {}", self.api_key)).unwrap(),
-        );
+        let auth_value = HeaderValue::from_str(&format!("Bearer {}", self.api_key))
+            .map_err(|e| Error::InvalidHeader(format!("Authorization: {e}")))?;
+        headers.insert("Authorization", auth_value);
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         headers.insert(
             "HTTP-Referer",
