@@ -50,20 +50,28 @@ fn render_left_panel(frame: &mut Frame, area: Rect, info: &WelcomeInfo) {
         Line::from(""),
         Line::from(Span::styled("Welcome back!", Theme::welcome_title())),
         Line::from(""),
-        Line::from(Span::styled("      ╱▔▔▔▔▔╲", Theme::welcome_title())),
-        Line::from(Span::styled("     ╱ ●   ● ╲", Theme::welcome_title())),
-        Line::from(Span::styled("    ╱    ▽    ╲", Theme::welcome_title())),
-        Line::from(Span::styled("   ╱___________╲", Theme::welcome_title())),
+        Line::from(Span::styled("    ▄▄▄▄▄▄▄▄▄", Theme::pet())),
+        Line::from(vec![
+            Span::styled("   █", Theme::pet()),
+            Span::styled("  ●   ●", Theme::welcome_title()),
+            Span::styled("  █", Theme::pet()),
+        ]),
+        Line::from(vec![
+            Span::styled("   █", Theme::pet()),
+            Span::styled("    ▽", Theme::welcome_title()),
+            Span::styled("    █", Theme::pet()),
+        ]),
+        Line::from(Span::styled("    ▀▀▀▀▀▀▀▀▀", Theme::pet())),
         Line::from(""),
         Line::from(vec![
             Span::styled("  ", Theme::welcome_info()),
-            Span::styled(&info.model, Theme::welcome_info()),
+            Span::styled(&info.model, Theme::model_info()),
             Span::styled(" · ", Theme::welcome_info()),
             Span::styled(&info.auth_source, Theme::welcome_info()),
         ]),
         Line::from(vec![
             Span::styled("  ", Theme::welcome_info()),
-            Span::styled(&info.cwd, Theme::welcome_info()),
+            Span::styled(&info.cwd, Theme::path_info()),
         ]),
         Line::from(vec![
             Span::styled("  Tools: ", Theme::welcome_info()),
@@ -98,7 +106,9 @@ fn render_right_panel(frame: &mut Frame, area: Rect) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
+    let sep_width = inner.width.saturating_sub(2) as usize;
     let lines = vec![
+        Line::from(""),
         Line::from(Span::styled(
             " Tips for getting started",
             Theme::panel_heading(),
@@ -107,9 +117,21 @@ fn render_right_panel(frame: &mut Frame, area: Rect) {
             " Type a message to start coding",
             Theme::panel_body(),
         )),
+        Line::from(Span::styled(
+            " Run /init to create a CLAUDE.md",
+            Theme::panel_body(),
+        )),
+        Line::from(Span::styled(
+            " Type /help for all commands",
+            Theme::panel_body(),
+        )),
+        Line::from(Span::styled(
+            " Ctrl+C to quit",
+            Theme::panel_body(),
+        )),
         Line::from(""),
         Line::from(Span::styled(
-            "─".repeat(inner.width.saturating_sub(2) as usize),
+            "─".repeat(sep_width),
             Theme::separator(),
         )),
         Line::from(""),

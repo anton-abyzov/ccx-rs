@@ -1,10 +1,16 @@
 use ratatui::style::{Color, Modifier, Style};
 
-/// The warm orange/salmon color used for borders and accents.
+/// The warm orange/salmon color used for accents.
 pub const ACCENT: Color = Color::Rgb(204, 120, 80);
+
+/// Pet/buddy orange-brown color.
+pub const PET: Color = Color::Rgb(190, 110, 60);
 
 /// Muted border color.
 pub const BORDER: Color = Color::Rgb(68, 68, 68);
+
+/// Green for model indicator and status.
+pub const GREEN: Color = Color::Rgb(80, 200, 120);
 
 /// Dark background for panels.
 pub const PANEL_BG: Color = Color::Reset;
@@ -45,9 +51,9 @@ impl Theme {
         Style::default().fg(Color::DarkGray)
     }
 
-    /// Footer accent (model indicator dot).
+    /// Footer accent (model indicator dot — green).
     pub fn footer_accent() -> Style {
-        Style::default().fg(ACCENT)
+        Style::default().fg(GREEN)
     }
 
     /// Input prompt (`❯`) in orange.
@@ -60,9 +66,9 @@ impl Theme {
         Style::default().fg(Color::White)
     }
 
-    /// Panel border (warm orange/salmon).
+    /// Panel border (subtle gray).
     pub fn border() -> Style {
-        Style::default().fg(ACCENT)
+        Style::default().fg(BORDER)
     }
 
     /// Muted separator lines.
@@ -89,10 +95,25 @@ impl Theme {
         Style::default().fg(Color::DarkGray)
     }
 
-    /// Right panel heading text.
+    /// Pet/buddy color (orange-brown).
+    pub fn pet() -> Style {
+        Style::default().fg(PET)
+    }
+
+    /// Model info text (green).
+    pub fn model_info() -> Style {
+        Style::default().fg(GREEN)
+    }
+
+    /// Path info text (dim gray).
+    pub fn path_info() -> Style {
+        Style::default().fg(Color::Rgb(100, 100, 100))
+    }
+
+    /// Right panel heading text (orange bold).
     pub fn panel_heading() -> Style {
         Style::default()
-            .fg(Color::White)
+            .fg(ACCENT)
             .add_modifier(Modifier::BOLD)
     }
 
@@ -121,9 +142,13 @@ mod tests {
         let _ = Theme::tool_name();
         let _ = Theme::error();
         let _ = Theme::footer();
+        let _ = Theme::footer_accent();
         let _ = Theme::input_prompt();
         let _ = Theme::welcome_title();
         let _ = Theme::panel_heading();
+        let _ = Theme::pet();
+        let _ = Theme::model_info();
+        let _ = Theme::path_info();
     }
 
     #[test]
