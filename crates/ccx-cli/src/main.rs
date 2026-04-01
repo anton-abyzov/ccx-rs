@@ -1,3 +1,6 @@
+mod commands;
+
+use std::collections::HashSet;
 use std::io::Write;
 use std::sync::mpsc;
 
@@ -142,7 +145,8 @@ async fn run_chat(
         &tool_schemas,
     );
 
-    let tool_count = registry.names().len();
+    let tool_names: Vec<String> = registry.names().into_iter().map(|s| s.to_string()).collect();
+    let tool_count = tool_names.len();
 
     let ctx = ccx_core::ToolContext::new(cwd.clone());
     let mut agent = ccx_core::AgentLoop::new(client, registry, ctx, system_prompt);
@@ -162,7 +166,7 @@ async fn run_chat(
     } else {
         // Interactive mode (inline default, full-screen TUI with --tui).
         let auth_source = match &resolved.source {
-            ccx_auth::KeySource::EnvVar => "Env".to_string(),
+            ccx_auth::KeySource::EnvVar => "API Key".to_string(),
             ccx_auth::KeySource::ConfigFile(path) => path
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
@@ -174,7 +178,7 @@ async fn run_chat(
         if use_tui {
             run_tui_mode(&mut agent, model, &auth_source, &cwd_display, tool_count).await?;
         } else {
-            run_inline_mode(&mut agent, model, &auth_source, &cwd_display, tool_count).await?;
+            run_inline_mode(&mut agent, model, &auth_source, &cwd_display, &tool_names).await?;
         }
     }
 
@@ -410,28 +414,44 @@ fn extract_tool_detail(name: &str, input: &serde_json::Value) -> String {
     }
 }
 
-/// Callback for inline rendering mode.
+/// Callback for inline rendering mode with buffered markdown output.
 struct InlineCallback {
-    in_text: bool,
+    text_buffer: String,
+    spinner_shown: bool,
+    always_allow: HashSet<String>,
 }
 
 impl InlineCallback {
     fn new() -> Self {
-        Self { in_text: false }
+        Self {
+            text_buffer: String::new(),
+            spinner_shown: false,
+            always_allow: HashSet::new(),
+        }
     }
 
     fn finish_text(&mut self) {
-        if self.in_text {
-            println!();
-            self.in_text = false;
+        if !self.text_buffer.is_empty() {
+            if self.spinner_shown {
+                ccx_tui::inline::clear_spinner();
+                self.spinner_shown = false;
+            }
+            ccx_tui::inline::render_markdown(&self.text_buffer);
+            self.text_buffer.clear();
+        } else if self.spinner_shown {
+            ccx_tui::inline::clear_spinner();
+            self.spinner_shown = false;
         }
     }
 }
 
 impl ccx_core::AgentCallback for InlineCallback {
     fn on_text(&mut self, text: &str) {
-        self.in_text = true;
-        ccx_tui::inline::render_text(text);
+        if self.text_buffer.is_empty() && !self.spinner_shown {
+            ccx_tui::inline::render_spinner();
+            self.spinner_shown = true;
+        }
+        self.text_buffer.push_str(text);
     }
 
     fn on_tool_start(&mut self, name: &str, input: &serde_json::Value) {
@@ -472,6 +492,21 @@ impl ccx_core::AgentCallback for InlineCallback {
     fn on_turn_complete(&mut self, _turn: usize, _cost: &ccx_core::CostTracker) {
         self.finish_text();
     }
+
+    fn should_allow_tool(&mut self, name: &str, input: &serde_json::Value) -> bool {
+        if self.always_allow.contains(name) {
+            return true;
+        }
+        let detail = extract_tool_detail(name, input);
+        match ccx_tui::inline::prompt_permission(name, &detail) {
+            ccx_tui::inline::PermissionChoice::Allow => true,
+            ccx_tui::inline::PermissionChoice::Deny => false,
+            ccx_tui::inline::PermissionChoice::AlwaysAllow => {
+                self.always_allow.insert(name.to_string());
+                true
+            }
+        }
+    }
 }
 
 /// Run inline interactive mode (default — no full-screen).
@@ -480,9 +515,12 @@ async fn run_inline_mode(
     model: &str,
     auth_source: &str,
     cwd_display: &str,
-    tool_count: usize,
+    tool_names: &[String],
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let tool_count = tool_names.len();
     ccx_tui::inline::render_welcome(model, auth_source, cwd_display, tool_count);
+    ccx_tui::inline::render_footer_line(model);
+    println!();
 
     loop {
         ccx_tui::inline::render_prompt();
@@ -495,22 +533,55 @@ async fn run_inline_mode(
         if input.is_empty() {
             continue;
         }
-        match input {
-            "/exit" | "/quit" => break,
-            "/help" => {
-                println!("Commands: /exit, /quit, /clear, /cost, /help");
-                continue;
+
+        // Slash command handling.
+        if input.starts_with('/') {
+            match input {
+                "/exit" | "/quit" => break,
+                "/help" => {
+                    commands::print_command_list();
+                    continue;
+                }
+                "/clear" => {
+                    print!("\x1b[2J\x1b[H");
+                    std::io::stdout().flush()?;
+                    continue;
+                }
+                "/cost" => {
+                    println!("{}", agent.cost().summary());
+                    continue;
+                }
+                "/model" => {
+                    println!("Model: {model}");
+                    continue;
+                }
+                "/compact" => {
+                    println!("\x1b[90mContext compaction not yet implemented.\x1b[0m");
+                    continue;
+                }
+                "/init" => {
+                    println!("\x1b[90mCLAUDE.md creation not yet implemented.\x1b[0m");
+                    continue;
+                }
+                "/version" => {
+                    println!("ccx v{}", env!("CARGO_PKG_VERSION"));
+                    continue;
+                }
+                "/tools" => {
+                    let names = tool_names.join(", ");
+                    println!("Available tools ({tool_count}): {names}");
+                    continue;
+                }
+                "/" => {
+                    commands::print_command_list();
+                    continue;
+                }
+                other => {
+                    // Partial match / autocomplete suggestions.
+                    commands::print_suggestions(other);
+                    continue;
+                }
             }
-            "/clear" => {
-                print!("\x1b[2J\x1b[H");
-                std::io::stdout().flush()?;
-                continue;
-            }
-            "/cost" => {
-                println!("{}", agent.cost().summary());
-                continue;
-            }
-            _ => {}
         }
 
         ccx_tui::inline::render_user_message(input);

@@ -61,6 +61,10 @@ pub trait AgentCallback: Send {
     fn on_thinking(&mut self, _text: &str) {}
     fn on_turn_complete(&mut self, _turn: usize, _cost: &CostTracker) {}
     fn on_retry(&mut self, _attempt: u32, _delay_ms: u64, _reason: &str) {}
+    /// Called before tool execution to check permission. Return false to deny.
+    fn should_allow_tool(&mut self, _name: &str, _input: &serde_json::Value) -> bool {
+        true
+    }
 }
 
 /// No-op callback.
@@ -193,6 +197,14 @@ impl AgentLoop {
             if stop_reason == Some(StopReason::ToolUse) && !tool_calls.is_empty() {
                 let mut results = Vec::new();
                 for (id, name, input) in tool_calls {
+                    if !callback.should_allow_tool(&name, &input) {
+                        results.push(ContentBlock::ToolResult {
+                            tool_use_id: id,
+                            content: "Tool execution denied by user".to_string(),
+                            is_error: Some(true),
+                        });
+                        continue;
+                    }
                     callback.on_tool_start(&name, &input);
                     let result =
                         self.registry.execute(&name, input, &self.context).await;
