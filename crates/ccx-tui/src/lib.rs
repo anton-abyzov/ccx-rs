@@ -1,5 +1,6 @@
 pub mod app;
 pub mod chat;
+pub mod inline;
 pub mod input;
 pub mod style;
 pub mod welcome;

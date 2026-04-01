@@ -34,6 +34,10 @@ enum Commands {
         /// Maximum turns per conversation exchange
         #[arg(long, default_value = "50")]
         max_turns: usize,
+
+        /// Use full-screen TUI instead of inline rendering
+        #[arg(long)]
+        tui: bool,
     },
     /// Show version and crate information
     Info,
@@ -50,6 +54,7 @@ async fn main() {
             prompt,
             permission_mode,
             max_turns,
+            tui,
         } => {
             if let Err(e) = run_chat(
                 &model,
@@ -57,6 +62,7 @@ async fn main() {
                 prompt.as_deref(),
                 &permission_mode,
                 max_turns,
+                tui,
             )
             .await
             {
@@ -94,6 +100,7 @@ async fn run_chat(
     prompt: Option<&str>,
     permission_mode: &str,
     max_turns: usize,
+    use_tui: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Resolve API key.
     let resolved = ccx_auth::resolve_api_key(explicit_key)?;
@@ -153,7 +160,7 @@ async fn run_chat(
         eprintln!("Model: {model} | Mode: {mode:?} | Tools: {tool_count}");
         run_single_shot(&mut agent, text).await?;
     } else {
-        // Full TUI mode.
+        // Interactive mode (inline default, full-screen TUI with --tui).
         let auth_source = match &resolved.source {
             ccx_auth::KeySource::EnvVar => "Env".to_string(),
             ccx_auth::KeySource::ConfigFile(path) => path
@@ -164,7 +171,11 @@ async fn run_chat(
         };
         let cwd_display = shorten_home(&cwd);
 
-        run_tui_mode(&mut agent, model, &auth_source, &cwd_display, tool_count).await?;
+        if use_tui {
+            run_tui_mode(&mut agent, model, &auth_source, &cwd_display, tool_count).await?;
+        } else {
+            run_inline_mode(&mut agent, model, &auth_source, &cwd_display, tool_count).await?;
+        }
     }
 
     // Suppress unused imports for crates wired but not directly called here.
@@ -397,4 +408,127 @@ fn extract_tool_detail(name: &str, input: &serde_json::Value) -> String {
         }
         _ => String::new(),
     }
+}
+
+/// Callback for inline rendering mode.
+struct InlineCallback {
+    in_text: bool,
+}
+
+impl InlineCallback {
+    fn new() -> Self {
+        Self { in_text: false }
+    }
+
+    fn finish_text(&mut self) {
+        if self.in_text {
+            println!();
+            self.in_text = false;
+        }
+    }
+}
+
+impl ccx_core::AgentCallback for InlineCallback {
+    fn on_text(&mut self, text: &str) {
+        self.in_text = true;
+        ccx_tui::inline::render_text(text);
+    }
+
+    fn on_tool_start(&mut self, name: &str, input: &serde_json::Value) {
+        self.finish_text();
+        let detail = extract_tool_detail(name, input);
+        ccx_tui::inline::render_tool_start(name, &detail);
+    }
+
+    fn on_tool_end(
+        &mut self,
+        _name: &str,
+        result: &Result<ccx_core::ToolResult, ccx_core::ToolError>,
+    ) {
+        let (success, preview) = match result {
+            Ok(r) if !r.is_error => {
+                let p: String = r.content.chars().take(500).collect();
+                (true, p)
+            }
+            Ok(r) => {
+                let p: String = r.content.chars().take(200).collect();
+                (false, p)
+            }
+            Err(e) => (false, e.to_string()),
+        };
+        ccx_tui::inline::render_tool_end(success, &preview);
+    }
+
+    fn on_thinking(&mut self, _text: &str) {}
+
+    fn on_retry(&mut self, attempt: u32, delay_ms: u64, reason: &str) {
+        self.finish_text();
+        ccx_tui::inline::render_error(&format!(
+            "retry {attempt}: {reason}, waiting {:.1}s",
+            delay_ms as f64 / 1000.0
+        ));
+    }
+
+    fn on_turn_complete(&mut self, _turn: usize, _cost: &ccx_core::CostTracker) {
+        self.finish_text();
+    }
+}
+
+/// Run inline interactive mode (default — no full-screen).
+async fn run_inline_mode(
+    agent: &mut ccx_core::AgentLoop,
+    model: &str,
+    auth_source: &str,
+    cwd_display: &str,
+    tool_count: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    ccx_tui::inline::render_welcome(model, auth_source, cwd_display, tool_count);
+
+    loop {
+        ccx_tui::inline::render_prompt();
+
+        let mut input = String::new();
+        if std::io::stdin().read_line(&mut input).is_err() || input.is_empty() {
+            break;
+        }
+        let input = input.trim();
+        if input.is_empty() {
+            continue;
+        }
+        match input {
+            "/exit" | "/quit" => break,
+            "/help" => {
+                println!("Commands: /exit, /quit, /clear, /cost, /help");
+                continue;
+            }
+            "/clear" => {
+                print!("\x1b[2J\x1b[H");
+                std::io::stdout().flush()?;
+                continue;
+            }
+            "/cost" => {
+                println!("{}", agent.cost().summary());
+                continue;
+            }
+            _ => {}
+        }
+
+        ccx_tui::inline::render_user_message(input);
+
+        let mut cb = InlineCallback::new();
+        match agent.send_message(input, &mut cb).await {
+            Ok(_) => cb.finish_text(),
+            Err(e) => {
+                cb.finish_text();
+                ccx_tui::inline::render_error(&format!("Error: {e}"));
+            }
+        }
+
+        ccx_tui::inline::render_separator();
+    }
+
+    ccx_tui::inline::render_footer(model);
+    println!("\nGoodbye!");
+    eprintln!("\n{}", agent.cost().summary());
+    Ok(())
 }
