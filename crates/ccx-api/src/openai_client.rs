@@ -201,6 +201,8 @@ struct OpenAiChoice {
 #[derive(Deserialize)]
 struct OpenAiDelta {
     content: Option<String>,
+    /// DeepSeek R1 native reasoning field.
+    reasoning_content: Option<String>,
     tool_calls: Option<Vec<OpenAiToolCallDelta>>,
     #[allow(dead_code)]
     role: Option<String>,
@@ -358,7 +360,9 @@ fn convert_tools(tools: &[Tool]) -> Vec<OpenAiToolDef> {
 struct OpenAiStreamState {
     lines: BoxStream<'static, Result<String, reqwest::Error>>,
     data_buf: String,
-    text_started: bool,
+    text_block_idx: Option<usize>,
+    thinking_block_idx: Option<usize>,
+    in_think_tag: bool,
     tool_blocks: HashMap<usize, usize>,
     next_idx: usize,
     pending: VecDeque<Result<StreamEvent, Error>>,
@@ -370,7 +374,9 @@ fn openai_sse_to_events(
     let state = OpenAiStreamState {
         lines: byte_stream_to_lines(byte_stream).boxed(),
         data_buf: String::new(),
-        text_started: false,
+        text_block_idx: None,
+        thinking_block_idx: None,
+        in_think_tag: false,
         tool_blocks: HashMap::new(),
         next_idx: 0,
         pending: VecDeque::new(),
@@ -420,6 +426,25 @@ fn openai_sse_to_events(
     }))
 }
 
+/// Ensure a text content block exists, creating one if needed. Returns its index.
+fn ensure_text_block(state: &mut OpenAiStreamState) -> usize {
+    match state.text_block_idx {
+        Some(idx) => idx,
+        None => {
+            let idx = state.next_idx;
+            state.text_block_idx = Some(idx);
+            state.next_idx += 1;
+            state.pending.push_back(Ok(StreamEvent::ContentBlockStart {
+                index: idx,
+                content_block: ContentBlock::Text {
+                    text: String::new(),
+                },
+            }));
+            idx
+        }
+    }
+}
+
 fn process_chunk(chunk: OpenAiChunk, state: &mut OpenAiStreamState) {
     let usage_copy = chunk.usage;
 
@@ -442,23 +467,102 @@ fn process_chunk(chunk: OpenAiChunk, state: &mut OpenAiStreamState) {
 
     let choice = &chunk.choices[0];
 
-    // Text content.
+    // Reasoning content (DeepSeek R1 native thinking).
+    if let Some(reasoning) = &choice.delta.reasoning_content {
+        if !reasoning.is_empty() {
+            let idx = match state.thinking_block_idx {
+                Some(idx) => idx,
+                None => {
+                    let idx = state.next_idx;
+                    state.thinking_block_idx = Some(idx);
+                    state.next_idx += 1;
+                    state.pending.push_back(Ok(StreamEvent::ContentBlockStart {
+                        index: idx,
+                        content_block: ContentBlock::Thinking {
+                            thinking: String::new(),
+                        },
+                    }));
+                    idx
+                }
+            };
+            state.pending.push_back(Ok(StreamEvent::ContentBlockDelta {
+                index: idx,
+                delta: Delta::ThinkingDelta {
+                    thinking: reasoning.clone(),
+                },
+            }));
+        }
+    }
+
+    // Text content with <think> tag detection.
     if let Some(text) = &choice.delta.content {
         if !text.is_empty() {
-            if !state.text_started {
-                state.text_started = true;
-                state.pending.push_back(Ok(StreamEvent::ContentBlockStart {
-                    index: state.next_idx,
-                    content_block: ContentBlock::Text {
-                        text: String::new(),
-                    },
-                }));
-                state.next_idx += 1;
+            let mut remaining = text.as_str();
+            while !remaining.is_empty() {
+                if state.in_think_tag {
+                    // Inside a <think> block — look for closing tag.
+                    if let Some(end_pos) = remaining.find("</think>") {
+                        let thinking_text = &remaining[..end_pos];
+                        if !thinking_text.is_empty() {
+                            let idx = state.thinking_block_idx.unwrap();
+                            state.pending.push_back(Ok(StreamEvent::ContentBlockDelta {
+                                index: idx,
+                                delta: Delta::ThinkingDelta {
+                                    thinking: thinking_text.to_string(),
+                                },
+                            }));
+                        }
+                        state.in_think_tag = false;
+                        remaining = &remaining[(end_pos + 8)..]; // skip "</think>"
+                    } else {
+                        // All remaining is thinking content.
+                        let idx = state.thinking_block_idx.unwrap();
+                        state.pending.push_back(Ok(StreamEvent::ContentBlockDelta {
+                            index: idx,
+                            delta: Delta::ThinkingDelta {
+                                thinking: remaining.to_string(),
+                            },
+                        }));
+                        remaining = "";
+                    }
+                } else if let Some(start_pos) = remaining.find("<think>") {
+                    // Text before <think> tag is regular content.
+                    let before = &remaining[..start_pos];
+                    if !before.is_empty() {
+                        let idx = ensure_text_block(state);
+                        state.pending.push_back(Ok(StreamEvent::ContentBlockDelta {
+                            index: idx,
+                            delta: Delta::TextDelta {
+                                text: before.to_string(),
+                            },
+                        }));
+                    }
+                    // Start thinking block.
+                    if state.thinking_block_idx.is_none() {
+                        let idx = state.next_idx;
+                        state.thinking_block_idx = Some(idx);
+                        state.next_idx += 1;
+                        state.pending.push_back(Ok(StreamEvent::ContentBlockStart {
+                            index: idx,
+                            content_block: ContentBlock::Thinking {
+                                thinking: String::new(),
+                            },
+                        }));
+                    }
+                    state.in_think_tag = true;
+                    remaining = &remaining[(start_pos + 7)..]; // skip "<think>"
+                } else {
+                    // Regular text content.
+                    let idx = ensure_text_block(state);
+                    state.pending.push_back(Ok(StreamEvent::ContentBlockDelta {
+                        index: idx,
+                        delta: Delta::TextDelta {
+                            text: remaining.to_string(),
+                        },
+                    }));
+                    remaining = "";
+                }
             }
-            state.pending.push_back(Ok(StreamEvent::ContentBlockDelta {
-                index: 0,
-                delta: Delta::TextDelta { text: text.clone() },
-            }));
         }
     }
 
@@ -618,5 +722,67 @@ mod tests {
         // Should have: ContentBlockStart, ContentBlockDelta("Four"), MessageDelta(EndTurn)
         assert!(events.len() >= 2);
         assert!(matches!(events.last(), Some(StreamEvent::MessageDelta { .. })));
+    }
+
+    #[tokio::test]
+    async fn test_reasoning_content_parsing() {
+        // DeepSeek R1 returns reasoning_content alongside content.
+        let raw = concat!(
+            "data: {\"id\":\"gen-1\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"Let me think...\"},\"finish_reason\":null}]}\n\n",
+            "data: {\"id\":\"gen-1\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\" 15 * 17 = 255\"},\"finish_reason\":null}]}\n\n",
+            "data: {\"id\":\"gen-1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"The answer is 255.\"},\"finish_reason\":null}]}\n\n",
+            "data: {\"id\":\"gen-1\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+
+        let byte_stream = futures::stream::iter(vec![Ok(bytes::Bytes::from(raw))]);
+        let mut event_stream = openai_sse_to_events(byte_stream);
+        let mut events = Vec::new();
+        while let Some(event) = event_stream.next().await {
+            events.push(event.unwrap());
+        }
+
+        // Should have: ThinkingStart, ThinkingDelta x2, TextStart, TextDelta, MessageDelta
+        let thinking_deltas: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e, StreamEvent::ContentBlockDelta { delta: Delta::ThinkingDelta { .. }, .. }))
+            .collect();
+        assert_eq!(thinking_deltas.len(), 2, "expected 2 thinking deltas");
+
+        let text_deltas: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e, StreamEvent::ContentBlockDelta { delta: Delta::TextDelta { .. }, .. }))
+            .collect();
+        assert_eq!(text_deltas.len(), 1, "expected 1 text delta");
+    }
+
+    #[tokio::test]
+    async fn test_think_tag_parsing() {
+        // Models that wrap reasoning in <think> tags.
+        let raw = concat!(
+            "data: {\"id\":\"gen-2\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"<think>Let me work this out\"},\"finish_reason\":null}]}\n\n",
+            "data: {\"id\":\"gen-2\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\" step by step.</think>The answer is 255.\"},\"finish_reason\":null}]}\n\n",
+            "data: {\"id\":\"gen-2\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+
+        let byte_stream = futures::stream::iter(vec![Ok(bytes::Bytes::from(raw))]);
+        let mut event_stream = openai_sse_to_events(byte_stream);
+        let mut events = Vec::new();
+        while let Some(event) = event_stream.next().await {
+            events.push(event.unwrap());
+        }
+
+        let thinking_deltas: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e, StreamEvent::ContentBlockDelta { delta: Delta::ThinkingDelta { .. }, .. }))
+            .collect();
+        assert!(thinking_deltas.len() >= 1, "expected thinking deltas from <think> tags");
+
+        let text_deltas: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e, StreamEvent::ContentBlockDelta { delta: Delta::TextDelta { .. }, .. }))
+            .collect();
+        assert!(text_deltas.len() >= 1, "expected text delta after </think>");
     }
 }

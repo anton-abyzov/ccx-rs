@@ -50,13 +50,17 @@ enum Commands {
         #[arg(long)]
         dangerously_skip_permissions: bool,
 
-        /// Enable extended thinking
+        /// Disable extended thinking (enabled by default for Anthropic)
         #[arg(long)]
-        thinking: bool,
+        no_thinking: bool,
 
-        /// Thinking token budget (requires --thinking, default 10000)
+        /// Thinking token budget (default 10000, set 0 to disable)
         #[arg(long, default_value = "10000")]
         thinking_budget: u32,
+
+        /// Hide thinking/reasoning output from display
+        #[arg(long)]
+        hide_thinking: bool,
 
         /// Enable sandbox for bash commands (macOS: Seatbelt, Linux: Landlock)
         #[arg(long)]
@@ -87,8 +91,9 @@ async fn main() {
             max_turns,
             tui,
             dangerously_skip_permissions,
-            thinking,
+            no_thinking,
             thinking_budget,
+            hide_thinking,
             sandbox,
             provider,
             openrouter_key,
@@ -101,8 +106,9 @@ async fn main() {
                 max_turns,
                 tui,
                 dangerously_skip_permissions,
-                thinking,
+                no_thinking,
                 thinking_budget,
+                hide_thinking,
                 sandbox,
                 &provider,
                 openrouter_key.as_deref(),
@@ -145,8 +151,9 @@ async fn run_chat(
     max_turns: usize,
     use_tui: bool,
     dangerously_skip_permissions: bool,
-    thinking: bool,
+    no_thinking: bool,
     thinking_budget: u32,
+    hide_thinking: bool,
     sandbox: bool,
     provider: &str,
     openrouter_key: Option<&str>,
@@ -251,12 +258,15 @@ async fn run_chat(
 
     let mut agent = ccx_core::AgentLoop::new(client, registry, ctx, system_prompt);
     agent.set_max_turns(max_turns);
-    if thinking {
+    // Thinking enabled by default for Anthropic; disable with --no-thinking or --thinking-budget 0.
+    let thinking_enabled = provider == "anthropic" && !no_thinking && thinking_budget > 0;
+    if thinking_enabled {
         agent.set_thinking(ccx_api::ThinkingConfig {
             thinking_type: "enabled".to_string(),
             budget_tokens: thinking_budget,
         });
     }
+    let show_thinking = !hide_thinking;
 
     if let Some(text) = prompt {
         // Non-interactive single-shot mode.
@@ -265,7 +275,7 @@ async fn run_chat(
             eprintln!("Account: {email}");
         }
         eprintln!("Model: {model} | Mode: {mode:?} | Tools: {tool_count}");
-        run_single_shot(&mut agent, text).await?;
+        run_single_shot(&mut agent, text, show_thinking).await?;
     } else {
         // Interactive mode (inline default, full-screen TUI with --tui).
         let cwd_display = shorten_home(&cwd);
@@ -273,7 +283,7 @@ async fn run_chat(
         if use_tui {
             run_tui_mode(&mut agent, model, &auth_source, &cwd_display, tool_count, email.as_deref()).await?;
         } else {
-            run_inline_mode(&mut agent, model, &auth_source, &cwd_display, &tool_names, bypass_permissions, email.as_deref()).await?;
+            run_inline_mode(&mut agent, model, &auth_source, &cwd_display, &tool_names, bypass_permissions, email.as_deref(), show_thinking).await?;
         }
     }
 
@@ -296,8 +306,9 @@ fn shorten_home(path: &std::path::Path) -> String {
 async fn run_single_shot(
     agent: &mut ccx_core::AgentLoop,
     text: &str,
+    show_thinking: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut cb = StreamCallback::new();
+    let mut cb = StreamCallback::new(show_thinking);
     let _result = agent.send_message(text, &mut cb).await?;
     println!();
     eprintln!("\n{}", agent.cost().summary());
@@ -395,7 +406,11 @@ impl ccx_core::AgentCallback for TuiCallback {
         });
     }
 
-    fn on_thinking(&mut self, _text: &str) {}
+    fn on_thinking(&mut self, text: &str) {
+        let _ = self.tx.send(ccx_tui::TuiEvent::StreamText(
+            format!("\x1b[2;3m{text}\x1b[0m"),
+        ));
+    }
 
     fn on_retry(&mut self, attempt: u32, delay_ms: u64, reason: &str) {
         let _ = self
@@ -415,11 +430,12 @@ impl ccx_core::AgentCallback for TuiCallback {
 /// Streaming callback for single-shot mode (prints to stdout/stderr).
 struct StreamCallback {
     chars_printed: usize,
+    show_thinking: bool,
 }
 
 impl StreamCallback {
-    fn new() -> Self {
-        Self { chars_printed: 0 }
+    fn new(show_thinking: bool) -> Self {
+        Self { chars_printed: 0, show_thinking }
     }
 }
 
@@ -458,7 +474,12 @@ impl ccx_core::AgentCallback for StreamCallback {
         }
     }
 
-    fn on_thinking(&mut self, _text: &str) {}
+    fn on_thinking(&mut self, text: &str) {
+        if self.show_thinking {
+            print!("\x1b[2;3m{text}\x1b[0m");
+            std::io::stdout().flush().ok();
+        }
+    }
 
     fn on_retry(&mut self, attempt: u32, delay_ms: u64, reason: &str) {
         eprintln!(
@@ -513,10 +534,12 @@ struct InlineCallback {
     bypass_permissions: bool,
     auth_source: String,
     retry_count: u32,
+    show_thinking: bool,
+    thinking_active: bool,
 }
 
 impl InlineCallback {
-    fn new(bypass_permissions: bool, auth_source: &str) -> Self {
+    fn new(bypass_permissions: bool, auth_source: &str, show_thinking: bool) -> Self {
         Self {
             text_buffer: String::new(),
             spinner_shown: false,
@@ -524,6 +547,8 @@ impl InlineCallback {
             bypass_permissions,
             auth_source: auth_source.to_string(),
             retry_count: 0,
+            show_thinking,
+            thinking_active: false,
         }
     }
 
@@ -544,6 +569,10 @@ impl InlineCallback {
 
 impl ccx_core::AgentCallback for InlineCallback {
     fn on_text(&mut self, text: &str) {
+        if self.thinking_active {
+            println!();
+            self.thinking_active = false;
+        }
         if self.text_buffer.is_empty() && !self.spinner_shown {
             ccx_tui::inline::render_spinner();
             self.spinner_shown = true;
@@ -576,7 +605,17 @@ impl ccx_core::AgentCallback for InlineCallback {
         ccx_tui::inline::render_tool_end(success, &preview);
     }
 
-    fn on_thinking(&mut self, _text: &str) {}
+    fn on_thinking(&mut self, text: &str) {
+        if self.show_thinking {
+            if self.spinner_shown {
+                ccx_tui::inline::clear_spinner();
+                self.spinner_shown = false;
+            }
+            print!("\x1b[2;3m{text}\x1b[0m");
+            std::io::stdout().flush().ok();
+            self.thinking_active = true;
+        }
+    }
 
     fn on_retry(&mut self, _attempt: u32, delay_ms: u64, _reason: &str) {
         self.finish_text();
@@ -626,6 +665,7 @@ async fn run_inline_mode(
     tool_names: &[String],
     bypass_permissions: bool,
     email: Option<&str>,
+    show_thinking: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let tool_count = tool_names.len();
     ccx_tui::inline::render_welcome(model, auth_source, cwd_display, tool_count, email);
@@ -753,7 +793,7 @@ async fn run_inline_mode(
                         ccx_tui::inline::clear_previous_line();
                         ccx_tui::inline::render_user_message(input);
 
-                        let mut cb = InlineCallback::new(bypass_permissions, auth_source);
+                        let mut cb = InlineCallback::new(bypass_permissions, auth_source, show_thinking);
                         match agent.send_message(&user_msg, &mut cb).await {
                             Ok(_) => cb.finish_text(),
                             Err(e) => {
@@ -774,7 +814,7 @@ async fn run_inline_mode(
                 ccx_tui::inline::clear_previous_line();
                 ccx_tui::inline::render_user_message(input);
 
-                let mut cb = InlineCallback::new(bypass_permissions, auth_source);
+                let mut cb = InlineCallback::new(bypass_permissions, auth_source, show_thinking);
                 match agent.send_message(input, &mut cb).await {
                     Ok(_) => cb.finish_text(),
                     Err(e) => {

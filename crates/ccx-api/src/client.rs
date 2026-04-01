@@ -66,9 +66,7 @@ impl ClaudeClient {
         if self.use_oauth {
             betas.push("oauth-2025-04-20");
         }
-        if req.thinking.is_some() {
-            betas.push("extended-thinking-2025-04-14");
-        }
+        // Extended thinking graduated to GA — no beta header needed.
 
         let mut headers = HeaderMap::new();
         if self.use_oauth {
