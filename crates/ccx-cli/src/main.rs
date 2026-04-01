@@ -17,6 +17,10 @@ use rustyline::Editor;
 struct Cli {
     #[command(subcommand)]
     command: Commands,
+
+    /// Logging level (trace, debug, info, warn, error)
+    #[arg(long, global = true, default_value = "info")]
+    log_level: String,
 }
 
 #[derive(Subcommand)]
@@ -82,6 +86,22 @@ enum Commands {
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
+
+    // Initialize logging
+    let level = cli.log_level.to_lowercase();
+    let filter = match level.as_str() {
+        "trace" => log::LevelFilter::Trace,
+        "debug" => log::LevelFilter::Debug,
+        "info" => log::LevelFilter::Info,
+        "warn" => log::LevelFilter::Warn,
+        "error" => log::LevelFilter::Error,
+        _ => log::LevelFilter::Info,
+    };
+    env_logger::builder()
+        .filter_level(filter)
+        .format_target(false)
+        .format_timestamp(None)
+        .init();
 
     match cli.command {
         Commands::Chat {
@@ -216,7 +236,7 @@ async fn run_chat(
         Vec::new()
     };
 
-    // Build system prompt with tool schemas.
+    // Build system prompt with tool schemas and skill routing hints.
     let claude_md_files = ccx_prompt::discover_claude_md(&cwd);
     let tool_schemas: Vec<ccx_prompt::ToolSchema> = registry
         .names()
@@ -229,10 +249,19 @@ async fn run_chat(
             })
         })
         .collect();
+    let all_skills = ccx_skill::discover_all_skills();
+    let skill_infos: Vec<ccx_prompt::SkillInfo> = all_skills
+        .iter()
+        .map(|s| ccx_prompt::SkillInfo {
+            name: s.name.clone(),
+            description: s.description.clone(),
+        })
+        .collect();
     let mut system_prompt = ccx_prompt::build_full_system_prompt(
         &claude_md_files,
         &cwd.to_string_lossy(),
         &tool_schemas,
+        &skill_infos,
     );
 
     // Wire memory: load memories and inject into system prompt.
