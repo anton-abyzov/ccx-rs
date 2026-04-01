@@ -135,6 +135,7 @@ name = "ccx-api"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "ccx-auth",
  "futures",
  "reqwest",
  "serde",
@@ -261,6 +262,7 @@ dependencies = [
 name = "ccx-skill"
 version = "0.1.0"
 dependencies = [
+ "dirs",
  "serde",
  "serde_json",
  "thiserror 2.0.18",

@@ -108,9 +108,9 @@ async fn run_chat(
     max_turns: usize,
     use_tui: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Resolve API key.
-    let resolved = ccx_auth::resolve_api_key(explicit_key)?;
-    let client = ccx_api::ClaudeClient::new(&resolved.key, model);
+    // Resolve authentication (API key or OAuth token from Claude Code).
+    let auth = ccx_auth::resolve_auth(explicit_key)?;
+    let client = ccx_api::ClaudeClient::with_auth(&auth, model);
 
     // Load settings.
     let settings = ccx_config::load_default_settings().unwrap_or_default();
@@ -157,25 +157,12 @@ async fn run_chat(
 
     if let Some(text) = prompt {
         // Non-interactive single-shot mode.
-        match &resolved.source {
-            ccx_auth::KeySource::EnvVar => eprintln!("Using API key from ANTHROPIC_API_KEY"),
-            ccx_auth::KeySource::ConfigFile(path) => {
-                eprintln!("Using API key from {}", path.display())
-            }
-            ccx_auth::KeySource::Explicit => eprintln!("Using provided API key"),
-        }
+        eprintln!("Auth: {}", auth.display_label());
         eprintln!("Model: {model} | Mode: {mode:?} | Tools: {tool_count}");
         run_single_shot(&mut agent, text).await?;
     } else {
         // Interactive mode (inline default, full-screen TUI with --tui).
-        let auth_source = match &resolved.source {
-            ccx_auth::KeySource::EnvVar => "API Key".to_string(),
-            ccx_auth::KeySource::ConfigFile(path) => path
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| "Config".into()),
-            ccx_auth::KeySource::Explicit => "API Key".into(),
-        };
+        let auth_source = auth.display_label().to_string();
         let cwd_display = shorten_home(&cwd);
 
         if use_tui {

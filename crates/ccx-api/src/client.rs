@@ -14,6 +14,7 @@ const API_VERSION: &str = "2023-06-01";
 pub struct ClaudeClient {
     http: reqwest::Client,
     api_key: String,
+    use_oauth: bool,
     model: String,
 }
 
@@ -23,7 +24,26 @@ impl ClaudeClient {
         Self {
             http: reqwest::Client::new(),
             api_key: api_key.into(),
+            use_oauth: false,
             model: model.into(),
+        }
+    }
+
+    /// Create a client from a resolved AuthMethod.
+    pub fn with_auth(auth: &ccx_auth::AuthMethod, model: impl Into<String>) -> Self {
+        match auth {
+            ccx_auth::AuthMethod::ApiKey(resolved) => Self {
+                http: reqwest::Client::new(),
+                api_key: resolved.key.clone(),
+                use_oauth: false,
+                model: model.into(),
+            },
+            ccx_auth::AuthMethod::OAuthToken { access_token, .. } => Self {
+                http: reqwest::Client::new(),
+                api_key: access_token.clone(),
+                use_oauth: true,
+                model: model.into(),
+            },
         }
     }
 
@@ -42,7 +62,18 @@ impl ClaudeClient {
         req.stream = Some(true);
 
         let mut headers = HeaderMap::new();
-        headers.insert("x-api-key", HeaderValue::from_str(&self.api_key).unwrap());
+        if self.use_oauth {
+            headers.insert(
+                "Authorization",
+                HeaderValue::from_str(&format!("Bearer {}", self.api_key)).unwrap(),
+            );
+            headers.insert(
+                "anthropic-beta",
+                HeaderValue::from_static("oauth-2025-04-20"),
+            );
+        } else {
+            headers.insert("x-api-key", HeaderValue::from_str(&self.api_key).unwrap());
+        }
         headers.insert(
             "anthropic-version",
             HeaderValue::from_static(API_VERSION),

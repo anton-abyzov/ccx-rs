@@ -6,6 +6,9 @@ pub enum AuthError {
     #[error("no API key found: set ANTHROPIC_API_KEY or add it to ~/.claude/config.json")]
     NoKeyFound,
 
+    #[error("no credentials found: set ANTHROPIC_API_KEY or log in with Claude Code")]
+    NoCredentials,
+
     #[error("config file error: {0}")]
     ConfigRead(String),
 
@@ -29,6 +32,82 @@ pub enum KeySource {
 pub struct ResolvedKey {
     pub key: String,
     pub source: KeySource,
+}
+
+/// Authentication method resolved from available credentials.
+#[derive(Debug, Clone)]
+pub enum AuthMethod {
+    /// Traditional API key authentication.
+    ApiKey(ResolvedKey),
+    /// OAuth token from Claude Code subscription (Max, Pro, Team).
+    OAuthToken {
+        access_token: String,
+        subscription_type: String,
+    },
+}
+
+impl AuthMethod {
+    /// Human-readable label for the auth source (for welcome panel display).
+    pub fn display_label(&self) -> &str {
+        match self {
+            AuthMethod::ApiKey(_) => "API Key",
+            AuthMethod::OAuthToken { subscription_type, .. } => match subscription_type.as_str() {
+                "max" => "Claude Max",
+                "pro" => "Claude Pro",
+                "team" => "Claude Team",
+                _ => "Claude Subscription",
+            },
+        }
+    }
+}
+
+/// Resolve authentication from all available sources, in priority order:
+/// 1. Explicit API key (if provided)
+/// 2. ANTHROPIC_API_KEY environment variable
+/// 3. Claude Code OAuth token from macOS Keychain
+/// 4. Claude Code OAuth token from ~/.claude/.credentials.json
+/// 5. API key from ~/.claude/config.json
+pub fn resolve_auth(explicit: Option<&str>) -> Result<AuthMethod, AuthError> {
+    // 1. Explicit key takes priority.
+    if let Some(key) = explicit {
+        return Ok(AuthMethod::ApiKey(ResolvedKey {
+            key: key.to_string(),
+            source: KeySource::Explicit,
+        }));
+    }
+
+    // 2. Environment variable.
+    if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
+        if !key.is_empty() {
+            return Ok(AuthMethod::ApiKey(ResolvedKey {
+                key,
+                source: KeySource::EnvVar,
+            }));
+        }
+    }
+
+    // 3. macOS Keychain OAuth token.
+    if cfg!(target_os = "macos") {
+        if let Some(oauth) = read_keychain_token() {
+            return Ok(oauth);
+        }
+    }
+
+    // 4. Credentials file OAuth token.
+    if let Some(oauth) = read_credentials_file() {
+        return Ok(oauth);
+    }
+
+    // 5. Config file API key.
+    if let Some(key) = read_key_from_config()? {
+        let config_path = config_file_path().unwrap();
+        return Ok(AuthMethod::ApiKey(ResolvedKey {
+            key,
+            source: KeySource::ConfigFile(config_path),
+        }));
+    }
+
+    Err(AuthError::NoCredentials)
 }
 
 /// Resolve the API key from multiple sources, in priority order:
@@ -64,6 +143,57 @@ pub fn resolve_api_key(explicit: Option<&str>) -> Result<ResolvedKey, AuthError>
     }
 
     Err(AuthError::NoKeyFound)
+}
+
+/// Read OAuth token from macOS Keychain (Claude Code stores it there).
+fn read_keychain_token() -> Option<AuthMethod> {
+    let user = std::env::var("USER").ok()?;
+    let output = std::process::Command::new("security")
+        .args(["find-generic-password", "-a", &user, "-w", "-s", "Claude Code-credentials"])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let json_str = String::from_utf8(output.stdout).ok()?.trim().to_string();
+    parse_oauth_json(&json_str)
+}
+
+/// Read OAuth token from ~/.claude/.credentials.json fallback file.
+fn read_credentials_file() -> Option<AuthMethod> {
+    let path = home_dir()?.join(".claude/.credentials.json");
+    let content = std::fs::read_to_string(path).ok()?;
+    parse_oauth_json(&content)
+}
+
+/// Parse Claude Code OAuth JSON and return an AuthMethod if valid and not expired.
+fn parse_oauth_json(json: &str) -> Option<AuthMethod> {
+    let v: serde_json::Value = serde_json::from_str(json).ok()?;
+    let oauth = v.get("claudeAiOauth")?;
+    let access_token = oauth.get("accessToken")?.as_str()?.to_string();
+    let subscription_type = oauth
+        .get("subscriptionType")
+        .and_then(|s| s.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+
+    // Check if token is expired.
+    if let Some(expires) = oauth.get("expiresAt").and_then(|e| e.as_i64()) {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        if now_ms > expires {
+            return None;
+        }
+    }
+
+    if access_token.is_empty() {
+        return None;
+    }
+    Some(AuthMethod::OAuthToken { access_token, subscription_type })
 }
 
 /// Path to ~/.claude/config.json
