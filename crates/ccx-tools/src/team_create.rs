@@ -3,8 +3,7 @@ use ccx_core::{Tool, ToolContext, ToolError, ToolResult};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-/// File name for persistent team storage.
-const TEAMS_FILE: &str = ".ccx-teams.json";
+use crate::meta_helpers;
 
 pub struct TeamCreateTool;
 
@@ -15,23 +14,23 @@ impl Tool for TeamCreateTool {
     }
 
     fn description(&self) -> &str {
-        "Create a named team with a description and persist it to the workspace"
+        "Create a named team for coordinating parallel agent work"
     }
 
     fn input_schema(&self) -> serde_json::Value {
         json!({
             "type": "object",
             "properties": {
-                "name": {
+                "team_name": {
                     "type": "string",
-                    "description": "Unique team identifier (slug-style name)"
+                    "description": "Unique team identifier (slug-style, e.g. 'feature-xyz')"
                 },
                 "description": {
                     "type": "string",
                     "description": "Human-readable description of the team's purpose"
                 }
             },
-            "required": ["name", "description"]
+            "required": ["team_name", "description"]
         })
     }
 
@@ -40,14 +39,16 @@ impl Tool for TeamCreateTool {
         input: serde_json::Value,
         ctx: &ToolContext,
     ) -> Result<ToolResult, ToolError> {
-        let name = input["name"]
+        let team_name = input["team_name"]
             .as_str()
-            .ok_or_else(|| ToolError::InvalidInput("name is required".into()))?
+            .ok_or_else(|| ToolError::InvalidInput("team_name is required".into()))?
             .trim()
             .to_string();
 
-        if name.is_empty() {
-            return Err(ToolError::InvalidInput("name must not be empty".into()));
+        if team_name.is_empty() {
+            return Err(ToolError::InvalidInput(
+                "team_name must not be empty".into(),
+            ));
         }
 
         let description = input["description"]
@@ -62,210 +63,181 @@ impl Tool for TeamCreateTool {
             ));
         }
 
-        // Load existing teams.
-        let path = ctx.working_dir.join(TEAMS_FILE);
-        let mut teams: Vec<Team> = if path.exists() {
-            let raw = std::fs::read_to_string(&path)
-                .map_err(|e| ToolError::Io(e))?;
-            serde_json::from_str(&raw).unwrap_or_default()
-        } else {
-            Vec::new()
-        };
+        let base = meta_helpers::resolve_base_dir(ctx)?;
+        let team_path = meta_helpers::team_dir(&base, &team_name);
+        let tasks_path = meta_helpers::tasks_dir(&base, &team_name);
 
-        // Reject duplicate names.
-        if teams.iter().any(|t| t.name == name) {
+        // Reject duplicates.
+        if team_path.exists() {
             return Err(ToolError::InvalidInput(format!(
-                "team '{name}' already exists"
+                "team '{}' already exists",
+                team_name
             )));
         }
 
-        let created_at = std::time::SystemTime::now()
+        // Create directories: team config, tasks, messages.
+        std::fs::create_dir_all(&team_path).map_err(ToolError::Io)?;
+        std::fs::create_dir_all(&tasks_path).map_err(ToolError::Io)?;
+        std::fs::create_dir_all(meta_helpers::messages_dir(&base, &team_name))
+            .map_err(ToolError::Io)?;
+
+        // Write config.json.
+        let created = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
 
-        let team = Team {
-            name: name.clone(),
+        let config = TeamConfig {
+            team_name: team_name.clone(),
             description: description.clone(),
-            created_at,
+            created,
+            members: Vec::new(),
         };
 
-        teams.push(team);
+        let config_json = serde_json::to_string_pretty(&config)
+            .map_err(|e| ToolError::Execution(format!("serialize error: {e}")))?;
+        std::fs::write(team_path.join("config.json"), &config_json).map_err(ToolError::Io)?;
 
-        // Persist.
-        let json = serde_json::to_string_pretty(&teams)
-            .map_err(|e| ToolError::Execution(format!("failed to serialize: {e}")))?;
-        std::fs::write(&path, &json).map_err(|e| ToolError::Io(e))?;
-
-        let content = format!(
-            "Team created successfully.\n\nName:        {name}\nDescription: {description}\nCreated at:  {created_at} (unix)\nTotal teams: {}\n",
-            teams.len()
-        );
+        // Set as current team.
+        meta_helpers::set_current_team(&base, &team_name)?;
 
         Ok(ToolResult {
-            content,
+            content: format!(
+                "Team '{}' created.\n\nConfig: {}/config.json\nTasks:  {}\n\nSet as active team.",
+                team_name,
+                team_path.display(),
+                tasks_path.display()
+            ),
             is_error: false,
         })
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct Team {
-    name: String,
-    description: String,
-    created_at: u64,
-}
-
-/// Load teams from a directory (used in tests).
-#[cfg(test)]
-fn load_teams(working_dir: &std::path::PathBuf) -> Vec<Team> {
-    let path = working_dir.join(TEAMS_FILE);
-    if let Ok(data) = std::fs::read_to_string(&path) {
-        serde_json::from_str(&data).unwrap_or_default()
-    } else {
-        Vec::new()
-    }
+pub struct TeamConfig {
+    pub team_name: String,
+    pub description: String,
+    pub created: u64,
+    pub members: Vec<String>,
 }
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
     use super::*;
-
-    fn test_ctx(suffix: &str) -> ToolContext {
-        let dir = std::env::temp_dir().join(format!("ccx_test_team_{suffix}"));
-        let _ = std::fs::create_dir_all(&dir);
-        ToolContext::new(dir)
-    }
+    use crate::meta_helpers::{cleanup, test_ctx};
 
     #[test]
-    fn test_team_create_schema() {
+    fn test_schema() {
         let tool = TeamCreateTool;
         assert_eq!(tool.name(), "TeamCreate");
         let schema = tool.input_schema();
         let required = schema["required"].as_array().unwrap();
-        assert!(required.iter().any(|v| v == "name"));
+        assert!(required.iter().any(|v| v == "team_name"));
         assert!(required.iter().any(|v| v == "description"));
     }
 
     #[tokio::test]
-    async fn test_team_create_basic() {
-        let ctx = test_ctx("basic");
+    async fn test_create_basic() {
+        let (ctx, base) = test_ctx("tc_basic");
         let tool = TeamCreateTool;
+
         let result = tool
             .execute(
-                json!({
-                    "name": "research-ts-to-rust-migration",
-                    "description": "Research: TypeScript to Rust migration quality analysis for ccx-rs"
-                }),
+                json!({"team_name": "alpha", "description": "Alpha team"}),
                 &ctx,
             )
             .await
             .unwrap();
 
         assert!(!result.is_error);
-        assert!(result.content.contains("Team created successfully"));
-        assert!(result.content.contains("research-ts-to-rust-migration"));
+        assert!(result.content.contains("alpha"));
 
-        let teams = load_teams(&ctx.working_dir);
-        assert_eq!(teams.len(), 1);
-        assert_eq!(teams[0].name, "research-ts-to-rust-migration");
-        assert_eq!(
-            teams[0].description,
-            "Research: TypeScript to Rust migration quality analysis for ccx-rs"
-        );
+        // Verify directories.
+        assert!(base.join("teams/alpha/config.json").exists());
+        assert!(base.join("tasks/alpha").exists());
+        assert!(base.join("teams/alpha/messages").exists());
 
-        let _ = std::fs::remove_dir_all(&ctx.working_dir);
+        // Verify config content.
+        let raw = std::fs::read_to_string(base.join("teams/alpha/config.json")).unwrap();
+        let config: TeamConfig = serde_json::from_str(&raw).unwrap();
+        assert_eq!(config.team_name, "alpha");
+        assert_eq!(config.description, "Alpha team");
+        assert!(config.members.is_empty());
+
+        // Verify current team.
+        let current = std::fs::read_to_string(base.join("teams/.current")).unwrap();
+        assert_eq!(current, "alpha");
+
+        cleanup(&base);
     }
 
     #[tokio::test]
-    async fn test_team_create_duplicate_rejected() {
-        let ctx = test_ctx("dup");
+    async fn test_create_duplicate() {
+        let (ctx, base) = test_ctx("tc_dup");
         let tool = TeamCreateTool;
 
-        tool.execute(
-            json!({"name": "alpha", "description": "First"}),
-            &ctx,
-        )
-        .await
-        .unwrap();
-
-        let err = tool
-            .execute(
-                json!({"name": "alpha", "description": "Second"}),
-                &ctx,
-            )
+        tool.execute(json!({"team_name": "dup", "description": "First"}), &ctx)
             .await
-            .unwrap_err();
+            .unwrap();
 
-        assert!(matches!(err, ToolError::InvalidInput(_)));
-        let _ = std::fs::remove_dir_all(&ctx.working_dir);
-    }
-
-    #[tokio::test]
-    async fn test_team_create_multiple() {
-        let ctx = test_ctx("multi");
-        let tool = TeamCreateTool;
-
-        tool.execute(
-            json!({"name": "team-a", "description": "Alpha team"}),
-            &ctx,
-        )
-        .await
-        .unwrap();
-
-        tool.execute(
-            json!({"name": "team-b", "description": "Beta team"}),
-            &ctx,
-        )
-        .await
-        .unwrap();
-
-        let teams = load_teams(&ctx.working_dir);
-        assert_eq!(teams.len(), 2);
-        let _ = std::fs::remove_dir_all(&ctx.working_dir);
-    }
-
-    #[tokio::test]
-    async fn test_team_create_missing_name() {
-        let ctx = test_ctx("noname");
-        let tool = TeamCreateTool;
         let err = tool
-            .execute(json!({"description": "No name"}), &ctx)
+            .execute(json!({"team_name": "dup", "description": "Second"}), &ctx)
             .await
             .unwrap_err();
         assert!(matches!(err, ToolError::InvalidInput(_)));
-        let _ = std::fs::remove_dir_all(&ctx.working_dir);
+
+        cleanup(&base);
     }
 
     #[tokio::test]
-    async fn test_team_create_missing_description() {
-        let ctx = test_ctx("nodesc");
-        let tool = TeamCreateTool;
-        let err = tool
-            .execute(json!({"name": "my-team"}), &ctx)
+    async fn test_create_empty_name() {
+        let (ctx, base) = test_ctx("tc_empty");
+        let err = TeamCreateTool
+            .execute(json!({"team_name": " ", "description": "d"}), &ctx)
             .await
             .unwrap_err();
         assert!(matches!(err, ToolError::InvalidInput(_)));
-        let _ = std::fs::remove_dir_all(&ctx.working_dir);
+        cleanup(&base);
     }
 
     #[tokio::test]
-    async fn test_team_create_empty_name() {
-        let ctx = test_ctx("emptyname");
-        let tool = TeamCreateTool;
-        let err = tool
-            .execute(json!({"name": "  ", "description": "desc"}), &ctx)
+    async fn test_create_missing_fields() {
+        let (ctx, base) = test_ctx("tc_missing");
+        let err = TeamCreateTool
+            .execute(json!({"description": "no name"}), &ctx)
             .await
             .unwrap_err();
         assert!(matches!(err, ToolError::InvalidInput(_)));
-        let _ = std::fs::remove_dir_all(&ctx.working_dir);
+
+        let err = TeamCreateTool
+            .execute(json!({"team_name": "x"}), &ctx)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ToolError::InvalidInput(_)));
+
+        cleanup(&base);
     }
 
-    #[test]
-    fn test_load_teams_nonexistent() {
-        let teams = load_teams(&PathBuf::from("/nonexistent/path"));
-        assert!(teams.is_empty());
+    #[tokio::test]
+    async fn test_create_multiple_teams() {
+        let (ctx, base) = test_ctx("tc_multi");
+
+        TeamCreateTool
+            .execute(json!({"team_name": "t1", "description": "d1"}), &ctx)
+            .await
+            .unwrap();
+        TeamCreateTool
+            .execute(json!({"team_name": "t2", "description": "d2"}), &ctx)
+            .await
+            .unwrap();
+
+        // Last created is current.
+        let current = std::fs::read_to_string(base.join("teams/.current")).unwrap();
+        assert_eq!(current, "t2");
+
+        assert!(base.join("teams/t1/config.json").exists());
+        assert!(base.join("teams/t2/config.json").exists());
+
+        cleanup(&base);
     }
 }
