@@ -1,106 +1,90 @@
 # ccx-rs
 
-AI coding assistant CLI in Rust. 4.7MB binary, 19 tools, Claude Code-style TUI. Multi-provider: Claude (API key or Max/Pro subscription), OpenRouter (200+ models including free), Ollama (local).
+**Free, open-source AI coding assistant.** 4.7MB binary. 19 tools. Works with Claude, DeepSeek, Nemotron — or any model via OpenRouter. No subscription required.
 
 ![CCX-RS Terminal UI](assets/screenshot.png)
 
-## Quick Start
+## Install
 
-### With Claude (API key)
+### Binary (fastest)
 ```bash
-git clone https://github.com/anton-abyzov/ccx-rs.git
-cd ccx-rs
+curl -fsSL https://github.com/anton-abyzov/ccx-rs/releases/latest/download/ccx-macos-arm64 -o ccx && chmod +x ccx
+```
+
+### From source
+```bash
+git clone https://github.com/anton-abyzov/ccx-rs.git && cd ccx-rs
 cargo build --release
-export ANTHROPIC_API_KEY="your-key-here"
-./target/release/ccx chat
+# Binary at ./target/release/ccx
 ```
 
-### With Claude Max/Pro subscription (no API key needed)
+### Cargo
 ```bash
-./target/release/ccx chat          # reads token from macOS Keychain
-./target/release/ccx chat /login   # authenticate via browser
+cargo install --git https://github.com/anton-abyzov/ccx-rs
 ```
 
-### With OpenRouter (free models, no subscription)
+## Run
+
+### Free (no subscription, no payment)
 ```bash
 export OPENROUTER_API_KEY="your-free-key-from-openrouter.ai"
+ccx chat --provider openrouter --model "nvidia/nemotron-3-super-120b-a12b:free"
+```
+Get a free key: [openrouter.ai/keys](https://openrouter.ai/keys)
 
-# Standard model — fast, great for coding
-./target/release/ccx chat --provider openrouter --model "nvidia/nemotron-3-super-120b-a12b:free"
-
-# Reasoning model — shows thinking process (dim italic text)
-./target/release/ccx chat --provider openrouter --model "deepseek/deepseek-r1"
+### With reasoning (shows thinking process)
+```bash
+ccx chat --provider openrouter --model "deepseek/deepseek-r1"
 ```
 
-Get a free OpenRouter API key at [openrouter.ai/keys](https://openrouter.ai/keys).
+### With Claude Max/Pro (auto-detects subscription)
+```bash
+ccx chat   # reads token from macOS Keychain — no API key needed
+```
 
 ## Features
 
-- Inline TUI with welcome panel, ASCII pet, styled `❯` prompt
-- 19 tools: Bash, FileRead, FileWrite, FileEdit, Glob, Grep, WebFetch, WebSearch, Agent, TodoWrite, NotebookEdit, TeamCreate, TeamDelete, SendMessage, TaskCreate, TaskUpdate, TaskList, EnterPlanMode, ExitPlanMode
-- Multi-provider: Anthropic (direct + OAuth), OpenRouter (200+ models), Ollama (local)
-- Tab completion for slash commands + 50+ discovered skills
-- Thinking/reasoning display (DeepSeek R1, Claude extended thinking)
-- Parallel tool execution (all tools in a turn run concurrently)
-- Prompt caching (saves tokens on multi-turn conversations)
-- Persistent command history + session resume
-- MCP client (connect external tool servers via `.mcp.json`)
-- Memory system (loads `~/.claude/memory/` into context)
-- Context auto-compaction at token thresholds
-- macOS Seatbelt sandboxing (`--sandbox`)
-- Image/PDF reading (base64 encoded)
-- OAuth login (`/login` — browser-based authentication)
-- Cost tracking with per-turn token counts
+- **19 tools** — Bash, FileRead/Write/Edit, Glob, Grep, WebFetch, Agent (spawns sub-agents), TeamCreate, SendMessage, TaskCreate, and more
+- **Claude Code-style TUI** — welcome panel, styled `❯` prompt, inline tool display
+- **Multi-model** — Claude (API/subscription), OpenRouter (200+ models), Ollama (local)
+- **Tab autocomplete** — slash commands + 50+ discovered skills
+- **MCP support** — connect external tool servers via `.mcp.json`
+- **Session persistence** — `/resume`, `/continue`, `--resume`, `--continue`
+- **Parallel tool execution** — all tools in a turn run concurrently
+- **Thinking display** — see DeepSeek R1's reasoning in real-time
+- **OAuth login** — `/login` opens browser, no API key copy-paste
+- **Prompt caching** — saves tokens on multi-turn conversations
+
+## Demo
+
+```
+$ ccx chat --provider openrouter --model "nvidia/nemotron-3-super-120b-a12b:free"
+
+❯ Create a Python script that downloads the top 10 HN stories
+
+● Bash(pip install requests)
+  └ done
+● Write(hn_top10.py)
+  └ Created hn_top10.py (32 lines)
+● Bash(python hn_top10.py)
+  └ 1. Show HN: CCX - Open source AI coding assistant
+  └ 2. Ask HN: Best free AI models for coding?
+  └ ...
+```
 
 ## Slash Commands
 
 | Command | Description |
 |---------|-------------|
 | `/help` | Show all commands + discovered skills |
-| `/exit` | Exit the session |
-| `/clear` | Clear screen |
-| `/cost` | Show token usage and cost |
-| `/model` | Show current model |
 | `/tools` | List all 19 tools |
-| `/version` | Show version info |
 | `/login` | Authenticate via browser (OAuth) |
-| `/init` | Create CLAUDE.md in current directory |
-| `/compact` | Compress conversation context |
-| `/config` | Show current configuration |
-| `/status` | Show session stats |
-| `/sessions` | List previous sessions |
+| `/cost` | Show token usage and cost |
 | `/resume` | Resume a previous session |
-| `/continue` | Continue most recent session |
+| `/compact` | Compress conversation context |
 | `/doctor` | Check health (API, tools, MCP) |
-| `/simplify` | Invoke simplify skill |
-| `/batch` | Invoke batch skill |
 
-Plus 50+ discovered skills via Tab completion (type `/sw:` + Tab).
-
-## Model Examples
-
-### Standard coding (fast, no reasoning)
-```bash
-# Nvidia Nemotron — free, 262K context, excellent tool calling
-./target/release/ccx chat --provider openrouter --model "nvidia/nemotron-3-super-120b-a12b:free"
-```
-
-### Deep reasoning (shows thinking process)
-```bash
-# DeepSeek R1 — reasoning model, thinking displayed in dim italic
-./target/release/ccx chat --provider openrouter --model "deepseek/deepseek-r1"
-# You'll see: 💭 Let me think step by step... (in dim italic before the answer)
-```
-
-### Claude Sonnet (default, needs API key or subscription)
-```bash
-./target/release/ccx chat --model claude-sonnet-4-6
-```
-
-### Claude Opus (most capable)
-```bash
-./target/release/ccx chat --model claude-opus-4-6
-```
+Plus 50+ discovered skills via Tab completion.
 
 ## Architecture
 
@@ -111,7 +95,7 @@ Plus 50+ discovered skills via Tab completion (type `/sw:` + Tab).
 | `ccx-cli` | CLI entry point |
 | `ccx-core` | Core agent loop |
 | `ccx-api` | Anthropic API client with streaming |
-| `ccx-auth` | API key management |
+| `ccx-auth` | API key + OAuth management |
 | `ccx-tools` | Tool interface + 11 implementations |
 | `ccx-permission` | Permission DSL and rules |
 | `ccx-compact` | Context compression |
@@ -122,14 +106,6 @@ Plus 50+ discovered skills via Tab completion (type `/sw:` + Tab).
 | `ccx-mcp` | MCP client |
 | `ccx-tui` | Ratatui-based terminal UI |
 | `ccx-sandbox` | OS-native sandboxing |
-
-## Building
-
-```bash
-cargo build --release    # optimized binary
-cargo test               # run test suite
-cargo install --path crates/ccx-cli
-```
 
 ## License
 
