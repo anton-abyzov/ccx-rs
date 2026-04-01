@@ -201,8 +201,10 @@ struct OpenAiChoice {
 #[derive(Deserialize)]
 struct OpenAiDelta {
     content: Option<String>,
-    /// DeepSeek R1 native reasoning field.
+    /// DeepSeek R1 native reasoning field (direct API).
     reasoning_content: Option<String>,
+    /// OpenRouter reasoning field (used by most providers).
+    reasoning: Option<String>,
     tool_calls: Option<Vec<OpenAiToolCallDelta>>,
     #[allow(dead_code)]
     role: Option<String>,
@@ -467,8 +469,10 @@ fn process_chunk(chunk: OpenAiChunk, state: &mut OpenAiStreamState) {
 
     let choice = &chunk.choices[0];
 
-    // Reasoning content (DeepSeek R1 native thinking).
-    if let Some(reasoning) = &choice.delta.reasoning_content {
+    // Reasoning content: check `reasoning_content` (direct DeepSeek API) then `reasoning` (OpenRouter).
+    let reasoning_text = choice.delta.reasoning_content.as_deref()
+        .or(choice.delta.reasoning.as_deref());
+    if let Some(reasoning) = reasoning_text {
         if !reasoning.is_empty() {
             let idx = match state.thinking_block_idx {
                 Some(idx) => idx,
@@ -489,7 +493,7 @@ fn process_chunk(chunk: OpenAiChunk, state: &mut OpenAiStreamState) {
             state.pending.push_back(Ok(StreamEvent::ContentBlockDelta {
                 index: idx,
                 delta: Delta::ThinkingDelta {
-                    thinking: reasoning.clone(),
+                    thinking: reasoning.to_string(),
                 },
             }));
         }
@@ -786,5 +790,36 @@ mod tests {
             .filter(|e| matches!(e, StreamEvent::ContentBlockDelta { delta: Delta::TextDelta { .. }, .. }))
             .collect();
         assert!(text_deltas.len() >= 1, "expected text delta after </think>");
+    }
+
+    #[tokio::test]
+    async fn test_openrouter_reasoning_field() {
+        // OpenRouter uses "reasoning" instead of "reasoning_content".
+        let raw = concat!(
+            "data: {\"id\":\"gen-3\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"\",\"reasoning\":\"Okay, let's think\"},\"finish_reason\":null}]}\n\n",
+            "data: {\"id\":\"gen-3\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"\",\"reasoning\":\" step by step.\"},\"finish_reason\":null}]}\n\n",
+            "data: {\"id\":\"gen-3\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"The answer is 255.\"},\"finish_reason\":null}]}\n\n",
+            "data: {\"id\":\"gen-3\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+
+        let byte_stream = futures::stream::iter(vec![Ok(bytes::Bytes::from(raw))]);
+        let mut event_stream = openai_sse_to_events(byte_stream);
+        let mut events = Vec::new();
+        while let Some(event) = event_stream.next().await {
+            events.push(event.unwrap());
+        }
+
+        let thinking_deltas: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e, StreamEvent::ContentBlockDelta { delta: Delta::ThinkingDelta { .. }, .. }))
+            .collect();
+        assert_eq!(thinking_deltas.len(), 2, "expected 2 thinking deltas from 'reasoning' field");
+
+        let text_deltas: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e, StreamEvent::ContentBlockDelta { delta: Delta::TextDelta { .. }, .. }))
+            .collect();
+        assert_eq!(text_deltas.len(), 1, "expected 1 text delta");
     }
 }
