@@ -7,6 +7,7 @@ description = "Core agent loop and tool system"
 
 [dependencies]
 ccx-api = { path = "../ccx-api" }
+ccx-compact = { path = "../ccx-compact" }
 tokio = { workspace = true }
 futures = { workspace = true }
 serde = { workspace = true }

@@ -58,11 +58,36 @@ impl Tool for BashTool {
 
         let run_in_background = input["run_in_background"].as_bool().unwrap_or(false);
 
-        // Build the shell command with proper environment.
-        let mut cmd = tokio::process::Command::new("bash");
-        cmd.arg("-c")
-            .arg(command)
-            .current_dir(&ctx.working_dir)
+        // Build the shell command, optionally wrapped in a sandbox.
+        let (program, cmd_args) = if ctx.sandboxed {
+            let sandbox = ccx_sandbox::create_sandbox();
+            let config = ccx_sandbox::SandboxConfig {
+                enabled: true,
+                allow_read: vec!["/".into()],
+                allow_write: vec![
+                    ctx.working_dir.to_string_lossy().into_owned(),
+                    "/tmp".into(),
+                    std::env::var("HOME").unwrap_or_default(),
+                ],
+                allow_network: true,
+            };
+            match sandbox.wrap_command(command, &ctx.working_dir, &config) {
+                Ok(wrapped) if !wrapped.is_empty() => {
+                    let prog = wrapped[0].clone();
+                    let args = wrapped[1..].to_vec();
+                    (prog, args)
+                }
+                _ => ("bash".into(), vec!["-c".into(), command.into()]),
+            }
+        } else {
+            ("bash".into(), vec!["-c".into(), command.into()])
+        };
+
+        let mut cmd = tokio::process::Command::new(&program);
+        for arg in &cmd_args {
+            cmd.arg(arg);
+        }
+        cmd.current_dir(&ctx.working_dir)
             .env("HOME", std::env::var("HOME").unwrap_or_default())
             .env("PATH", std::env::var("PATH").unwrap_or_default())
             .env("TERM", std::env::var("TERM").unwrap_or_else(|_| "xterm-256color".into()));

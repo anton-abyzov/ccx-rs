@@ -1,5 +1,6 @@
 mod commands;
 mod completer;
+mod mcp_bridge;
 
 use std::collections::HashSet;
 use std::io::Write;
@@ -57,6 +58,10 @@ enum Commands {
         #[arg(long, default_value = "10000")]
         thinking_budget: u32,
 
+        /// Enable sandbox for bash commands (macOS: Seatbelt, Linux: Landlock)
+        #[arg(long)]
+        sandbox: bool,
+
         /// Provider: anthropic (default), openrouter
         #[arg(long, default_value = "anthropic")]
         provider: String,
@@ -84,6 +89,7 @@ async fn main() {
             dangerously_skip_permissions,
             thinking,
             thinking_budget,
+            sandbox,
             provider,
             openrouter_key,
         } => {
@@ -97,6 +103,7 @@ async fn main() {
                 dangerously_skip_permissions,
                 thinking,
                 thinking_budget,
+                sandbox,
                 &provider,
                 openrouter_key.as_deref(),
             )
@@ -140,6 +147,7 @@ async fn run_chat(
     dangerously_skip_permissions: bool,
     thinking: bool,
     thinking_budget: u32,
+    sandbox: bool,
     provider: &str,
     openrouter_key: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -187,12 +195,20 @@ async fn run_chat(
     // Bypass permissions when flag is set or mode allows it.
     let bypass_permissions = dangerously_skip_permissions || mode.allows_writes();
 
-    // Build tool registry.
+    // Build tool registry with built-in tools.
     let mut registry = ccx_core::ToolRegistry::new();
     ccx_tools::register_all(&mut registry);
 
-    // Build system prompt with tool schemas.
     let cwd = std::env::current_dir()?;
+
+    // Wire MCP: load .mcp.json and register MCP server tools.
+    let _mcp_clients = if let Some(mcp_config) = mcp_bridge::load_mcp_config(&cwd) {
+        mcp_bridge::register_mcp_tools(&mcp_config, &mut registry).await
+    } else {
+        Vec::new()
+    };
+
+    // Build system prompt with tool schemas.
     let claude_md_files = ccx_prompt::discover_claude_md(&cwd);
     let tool_schemas: Vec<ccx_prompt::ToolSchema> = registry
         .names()
@@ -205,16 +221,34 @@ async fn run_chat(
             })
         })
         .collect();
-    let system_prompt = ccx_prompt::build_full_system_prompt(
+    let mut system_prompt = ccx_prompt::build_full_system_prompt(
         &claude_md_files,
         &cwd.to_string_lossy(),
         &tool_schemas,
     );
 
+    // Wire memory: load memories and inject into system prompt.
+    let memory_dir = dirs::home_dir()
+        .unwrap_or_default()
+        .join(".claude")
+        .join("memory");
+    let memory_store = ccx_memory::MemoryStore::new(memory_dir);
+    if let Ok(index) = memory_store.load_index() {
+        if !index.is_empty() {
+            system_prompt.push_str("\n\n# Memories\n\n");
+            system_prompt.push_str(&index);
+        }
+    }
+
     let tool_names: Vec<String> = registry.names().into_iter().map(|s| s.to_string()).collect();
     let tool_count = tool_names.len();
 
-    let ctx = ccx_core::ToolContext::new(cwd.clone());
+    // Wire sandbox: set sandboxed flag on tool context when --sandbox is used.
+    let mut ctx = ccx_core::ToolContext::new(cwd.clone());
+    if sandbox {
+        ctx.sandboxed = true;
+    }
+
     let mut agent = ccx_core::AgentLoop::new(client, registry, ctx, system_prompt);
     agent.set_max_turns(max_turns);
     if thinking {
@@ -242,11 +276,6 @@ async fn run_chat(
             run_inline_mode(&mut agent, model, &auth_source, &cwd_display, &tool_names, bypass_permissions, email.as_deref()).await?;
         }
     }
-
-    // Suppress unused imports for crates wired but not directly called here.
-    let _ = ccx_memory::MemoryType::User;
-    let _ = ccx_compact::DEFAULT_THRESHOLD;
-    let _ = ccx_sandbox::create_sandbox();
 
     Ok(())
 }
@@ -665,7 +694,8 @@ async fn run_inline_mode(
                             true
                         }
                         "/compact" => {
-                            println!("\x1b[90mContext compaction not yet implemented.\x1b[0m");
+                            agent.compact();
+                            println!("\x1b[32mContext compacted.\x1b[0m");
                             true
                         }
                         "/init" => {

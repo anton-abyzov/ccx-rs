@@ -23,7 +23,9 @@ ccx-mcp = { path = "../ccx-mcp" }
 ccx-skill = { path = "../ccx-skill" }
 ccx-sandbox = { path = "../ccx-sandbox" }
 ccx-tui = { path = "../ccx-tui" }
+async-trait = { workspace = true }
 clap = { workspace = true }
+serde = { workspace = true }
 tokio = { workspace = true }
 futures = { workspace = true }
 serde_json = { workspace = true }

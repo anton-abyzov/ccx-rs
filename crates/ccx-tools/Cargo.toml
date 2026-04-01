@@ -8,6 +8,7 @@ description = "Built-in tools for ccx"
 [dependencies]
 ccx-core = { path = "../ccx-core" }
 ccx-api = { path = "../ccx-api" }
+ccx-sandbox = { path = "../ccx-sandbox" }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

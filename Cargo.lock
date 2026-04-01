@@ -190,6 +190,7 @@ dependencies = [
 name = "ccx-cli"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "ccx-api",
  "ccx-auth",
  "ccx-compact",
@@ -207,6 +208,7 @@ dependencies = [
  "dirs",
  "futures",
  "rustyline",
+ "serde",
  "serde_json",
  "tokio",
 ]
@@ -236,6 +238,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "ccx-api",
+ "ccx-compact",
  "futures",
  "glob",
  "serde",
@@ -309,6 +312,7 @@ dependencies = [
  "base64",
  "ccx-api",
  "ccx-core",
+ "ccx-sandbox",
  "glob",
  "reqwest",
  "serde",

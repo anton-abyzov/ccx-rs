@@ -122,6 +122,97 @@ impl AgentLoop {
         &self.cost
     }
 
+    /// Force compaction of conversation context.
+    pub fn compact(&mut self) {
+        self.compact_tool_results(2000);
+        self.compact_messages();
+    }
+
+    /// Auto-compact if conversation exceeds token thresholds.
+    fn maybe_compact(&mut self) {
+        let total_chars: usize = self
+            .messages
+            .iter()
+            .map(|m| Self::message_chars(m))
+            .sum();
+        let estimated_tokens = (total_chars as f64 / 3.5).ceil() as usize;
+
+        if estimated_tokens > ccx_compact::DEFAULT_THRESHOLD {
+            self.compact_tool_results(2000);
+            self.compact_messages();
+        } else if estimated_tokens > 100_000 {
+            self.compact_tool_results(5000);
+        }
+    }
+
+    /// Truncate tool result content blocks exceeding max_chars.
+    fn compact_tool_results(&mut self, max_chars: usize) {
+        for msg in &mut self.messages {
+            if let MessageContent::Blocks(blocks) = &mut msg.content {
+                for block in blocks {
+                    if let ContentBlock::ToolResult { content, .. } = block {
+                        if content.len() > max_chars {
+                            let total = content.len();
+                            content.truncate(200);
+                            content.push_str(&format!(
+                                "... [truncated, {total} chars total]"
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Structural compaction: keep last few messages, drop the rest.
+    fn compact_messages(&mut self) {
+        if self.messages.len() <= 6 {
+            return;
+        }
+        let keep = 4;
+        let drop_count = self.messages.len() - keep;
+        let kept = self.messages.split_off(drop_count);
+        self.messages.clear();
+
+        self.messages.push(InputMessage {
+            role: Role::User,
+            content: MessageContent::Text(format!(
+                "[Context compacted: {drop_count} earlier messages removed to save context]"
+            )),
+        });
+
+        // If first kept message is user role, insert assistant bridge for proper alternation.
+        let first_is_user = kept.first().map_or(false, |m| match m.role {
+            Role::User => true,
+            _ => false,
+        });
+        if first_is_user {
+            self.messages.push(InputMessage {
+                role: Role::Assistant,
+                content: MessageContent::Text(
+                    "Understood, continuing from the recent context.".into(),
+                ),
+            });
+        }
+
+        self.messages.extend(kept);
+    }
+
+    fn message_chars(msg: &InputMessage) -> usize {
+        match &msg.content {
+            MessageContent::Text(t) => t.len(),
+            MessageContent::Blocks(blocks) => blocks
+                .iter()
+                .map(|b| match b {
+                    ContentBlock::Text { text } => text.len(),
+                    ContentBlock::ToolUse { input, .. } => input.to_string().len(),
+                    ContentBlock::ToolResult { content, .. } => content.len(),
+                    ContentBlock::Thinking { thinking } => thinking.len(),
+                })
+                .sum(),
+        }
+    }
+
     /// Send a user message and run the agent loop until completion.
     pub async fn send_message(
         &mut self,
@@ -139,6 +230,9 @@ impl AgentLoop {
                 return Err(AgentLoopError::MaxTurnsExceeded(self.max_turns));
             }
             turn += 1;
+
+            // Auto-compact if conversation is approaching context limits.
+            self.maybe_compact();
 
             let req = MessageRequest {
                 model: String::new(),
