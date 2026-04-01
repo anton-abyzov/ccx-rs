@@ -48,6 +48,38 @@ pub const COMMANDS: &[SlashCommand] = &[
         name: "/login",
         description: "Authenticate with Claude (opens browser)",
     },
+    SlashCommand {
+        name: "/resume",
+        description: "Resume a previous session (optionally by ID)",
+    },
+    SlashCommand {
+        name: "/continue",
+        description: "Resume the most recent session in this directory",
+    },
+    SlashCommand {
+        name: "/doctor",
+        description: "Check system health (API, tools, MCP)",
+    },
+    SlashCommand {
+        name: "/config",
+        description: "Show current configuration",
+    },
+    SlashCommand {
+        name: "/sessions",
+        description: "List recent sessions",
+    },
+    SlashCommand {
+        name: "/status",
+        description: "Show current session status",
+    },
+    SlashCommand {
+        name: "/simplify",
+        description: "Run the simplify skill on recent changes",
+    },
+    SlashCommand {
+        name: "/batch",
+        description: "Run the batch skill with a prompt",
+    },
 ];
 
 /// Find commands matching a prefix (e.g., "/he" matches "/help").

@@ -480,6 +480,7 @@ fn process_chunk(chunk: OpenAiChunk, state: &mut OpenAiStreamState) {
                         index: idx,
                         content_block: ContentBlock::Thinking {
                             thinking: String::new(),
+                            signature: None,
                         },
                     }));
                     idx
@@ -546,6 +547,7 @@ fn process_chunk(chunk: OpenAiChunk, state: &mut OpenAiStreamState) {
                             index: idx,
                             content_block: ContentBlock::Thinking {
                                 thinking: String::new(),
+                                signature: None,
                             },
                         }));
                     }

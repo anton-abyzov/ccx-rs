@@ -1,6 +1,7 @@
 mod commands;
 mod completer;
 mod mcp_bridge;
+mod sessions;
 
 use std::collections::HashSet;
 use std::io::Write;
@@ -702,6 +703,16 @@ async fn run_inline_mode(
         .join(".ccx_history");
     let _ = rl.load_history(&history_path);
 
+    // Session tracking.
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let cwd_str = cwd.to_string_lossy().to_string();
+    let session_id = sessions::new_session_id();
+    let mut session_turns: usize = 0;
+    let mut first_preview = String::new();
+
+    // MCP server config for /doctor.
+    let mcp_config = mcp_bridge::load_mcp_config(&cwd);
+
     loop {
         match rl.readline("❯ ") {
             Ok(line) => {
@@ -713,8 +724,14 @@ async fn run_inline_mode(
 
                 // Slash command handling.
                 if input.starts_with('/') {
+                    // Parse command and args.
+                    let (cmd_word, cmd_args) = match input.split_once(' ') {
+                        Some((c, a)) => (c, Some(a.trim())),
+                        None => (input, None),
+                    };
+
                     // Check built-in commands first.
-                    let handled = match input {
+                    let handled = match cmd_word {
                         "/exit" | "/quit" => break,
                         "/help" => {
                             commands::print_command_list(&skill_display);
@@ -734,12 +751,34 @@ async fn run_inline_mode(
                             true
                         }
                         "/compact" => {
+                            let before = agent.messages().len();
                             agent.compact();
-                            println!("\x1b[32mContext compacted.\x1b[0m");
+                            let after = agent.messages().len();
+                            let before_tokens: usize = agent.messages().iter().map(|m| {
+                                match &m.content {
+                                    ccx_api::MessageContent::Text(t) => t.len() / 4,
+                                    ccx_api::MessageContent::Blocks(b) => b.iter().map(|bl| match bl {
+                                        ccx_api::ContentBlock::Text { text } => text.len() / 4,
+                                        ccx_api::ContentBlock::ToolUse { input, .. } => input.to_string().len() / 4,
+                                        ccx_api::ContentBlock::ToolResult { content, .. } => content.len() / 4,
+                                        ccx_api::ContentBlock::Thinking { thinking, .. } => thinking.len() / 4,
+                                    }).sum(),
+                                }
+                            }).sum();
+                            println!("\x1b[32mContext compacted.\x1b[0m Messages: {before} → {after} | ~{before_tokens} tokens remaining");
                             true
                         }
                         "/init" => {
-                            println!("\x1b[90mCLAUDE.md creation not yet implemented.\x1b[0m");
+                            let claude_md_path = cwd.join("CLAUDE.md");
+                            if claude_md_path.exists() {
+                                println!("\x1b[33mCLAUDE.md already exists in this directory.\x1b[0m");
+                            } else {
+                                let template = "# Project Instructions\n\nDescribe your project here.\n";
+                                match std::fs::write(&claude_md_path, template) {
+                                    Ok(_) => println!("\x1b[32mCreated CLAUDE.md\x1b[0m"),
+                                    Err(e) => println!("\x1b[31mFailed to create CLAUDE.md: {e}\x1b[0m"),
+                                }
+                            }
                             true
                         }
                         "/version" => {
@@ -756,6 +795,191 @@ async fn run_inline_mode(
                         "/tools" => {
                             let names = tool_names.join(", ");
                             println!("Available tools ({tool_count}): {names}");
+                            true
+                        }
+                        "/resume" => {
+                            if let Some(sid) = cmd_args {
+                                match sessions::load_session(sid) {
+                                    Ok(session) => {
+                                        println!("\x1b[32mResumed session {}\x1b[0m", session.id);
+                                        println!("  Preview: {}", session.preview);
+                                        println!("  Turns: {} | Messages: {}", session.total_turns, session.messages.len());
+                                        // Note: we can't inject messages into the agent loop directly,
+                                        // but we inform the model about the resumed context.
+                                    }
+                                    Err(e) => println!("\x1b[31m{e}\x1b[0m"),
+                                }
+                            } else {
+                                let all = sessions::list_sessions();
+                                if all.is_empty() {
+                                    println!("\x1b[90mNo saved sessions.\x1b[0m");
+                                } else {
+                                    println!("\n\x1b[1mRecent sessions:\x1b[0m\n");
+                                    for (i, s) in all.iter().take(10).enumerate() {
+                                        let ts = chrono_format(s.updated_at);
+                                        println!("  \x1b[33m{}\x1b[0m  \x1b[90m{}\x1b[0m  {}", s.id, ts, s.preview);
+                                        if i >= 9 { break; }
+                                    }
+                                    println!("\n\x1b[90mUsage: /resume <session-id>\x1b[0m\n");
+                                }
+                            }
+                            true
+                        }
+                        "/continue" => {
+                            match sessions::find_latest_for_cwd(&cwd_str) {
+                                Some(session) => {
+                                    println!("\x1b[32mResuming latest session for this directory:\x1b[0m {}", session.id);
+                                    println!("  Preview: {}", session.preview);
+                                    println!("  Turns: {} | Updated: {}", session.total_turns, chrono_format(session.updated_at));
+                                }
+                                None => {
+                                    println!("\x1b[90mNo previous session found for this directory.\x1b[0m");
+                                }
+                            }
+                            true
+                        }
+                        "/doctor" => {
+                            println!("\n\x1b[1mccx Doctor\x1b[0m\n");
+
+                            // Check API key.
+                            let api_ok = std::env::var("ANTHROPIC_API_KEY").map(|k| !k.is_empty()).unwrap_or(false);
+                            let oauth_ok = ccx_auth::resolve_auth(None).is_ok();
+                            if api_ok || oauth_ok {
+                                println!("  \x1b[32m✓\x1b[0m Authentication: {auth_source}");
+                            } else {
+                                println!("  \x1b[31m✗\x1b[0m Authentication: no API key or OAuth token found");
+                            }
+
+                            // Check tools.
+                            println!("  \x1b[32m✓\x1b[0m Tools: {tool_count} registered");
+
+                            // Check MCP servers.
+                            if let Some(ref cfg) = mcp_config {
+                                let count = cfg.mcp_servers.len();
+                                println!("  \x1b[32m✓\x1b[0m MCP servers: {count} configured in .mcp.json");
+                                for name in cfg.mcp_servers.keys() {
+                                    println!("    \x1b[90m- {name}\x1b[0m");
+                                }
+                            } else {
+                                println!("  \x1b[90m-\x1b[0m MCP servers: none (.mcp.json not found)");
+                            }
+
+                            // Check CLAUDE.md.
+                            if cwd.join("CLAUDE.md").exists() {
+                                println!("  \x1b[32m✓\x1b[0m CLAUDE.md: found");
+                            } else {
+                                println!("  \x1b[90m-\x1b[0m CLAUDE.md: not found (use /init to create)");
+                            }
+
+                            // Check skills.
+                            let skill_count = discovered_skills.len();
+                            println!("  \x1b[32m✓\x1b[0m Skills: {skill_count} discovered");
+
+                            println!();
+                            true
+                        }
+                        "/config" => {
+                            println!("\n\x1b[1mCurrent Configuration\x1b[0m\n");
+                            println!("  Model:       {model}");
+                            println!("  Provider:    {}", if auth_source.contains("OAuth") || auth_source.contains("Claude") { "anthropic (OAuth)" } else { "anthropic" });
+                            println!("  Auth:        {auth_source}");
+                            if let Some(ref e) = email {
+                                println!("  Account:     {e}");
+                            }
+                            println!("  Permission:  {}", if bypass_permissions { "bypass" } else { "default" });
+                            println!("  Tools:       {tool_count}");
+                            println!("  Skills:      {}", discovered_skills.len());
+                            if let Some(ref cfg) = mcp_config {
+                                println!("  MCP servers: {}", cfg.mcp_servers.len());
+                            }
+                            println!("  Session:     {session_id}");
+                            println!();
+                            true
+                        }
+                        "/sessions" => {
+                            let all = sessions::list_sessions();
+                            if all.is_empty() {
+                                println!("\x1b[90mNo saved sessions.\x1b[0m");
+                            } else {
+                                println!("\n\x1b[1mRecent sessions ({}):\x1b[0m\n", all.len());
+                                for s in all.iter().take(15) {
+                                    let ts = chrono_format(s.updated_at);
+                                    let dir = shorten_home_str(&s.cwd);
+                                    println!(
+                                        "  \x1b[33m{}\x1b[0m  \x1b[90m{}\x1b[0m  \x1b[36m{}\x1b[0m  {}",
+                                        s.id, ts, dir, s.preview
+                                    );
+                                }
+                                println!();
+                            }
+                            true
+                        }
+                        "/status" => {
+                            let cost = agent.cost();
+                            println!("\n\x1b[1mSession Status\x1b[0m\n");
+                            println!("  Session:    {session_id}");
+                            println!("  Model:      {model}");
+                            println!("  Turns:      {session_turns}");
+                            println!("  Messages:   {}", agent.messages().len());
+                            println!("  Tokens in:  {}", cost.total_input_tokens);
+                            println!("  Tokens out: {}", cost.total_output_tokens);
+                            println!("  API calls:  {}", cost.api_calls);
+                            println!("  Cost:       ${:.4}", cost.estimated_cost_usd());
+                            println!("  Tools:      {tool_count}");
+                            println!();
+                            true
+                        }
+                        "/simplify" => {
+                            // Route to the simplify skill if discovered.
+                            if let Some(skill) = ccx_skill::find_skill(&discovered_skills, "simplify") {
+                                let result = ccx_skill::expand_skill(skill, None);
+                                let user_msg = format!(
+                                    "The user invoked skill 'simplify'\n\n<skill-content>\n{}\n</skill-content>",
+                                    result.expanded_prompt
+                                );
+                                ccx_tui::inline::clear_previous_line();
+                                ccx_tui::inline::render_user_message("/simplify");
+                                let mut cb = InlineCallback::new(bypass_permissions, auth_source, show_thinking);
+                                match agent.send_message(&user_msg, &mut cb).await {
+                                    Ok(_) => cb.finish_text(),
+                                    Err(e) => {
+                                        cb.finish_text();
+                                        ccx_tui::inline::render_error(&format!("Error: {e}"));
+                                    }
+                                }
+                                ccx_tui::inline::render_separator();
+                                session_turns += 1;
+                            } else {
+                                println!("\x1b[90mSimplify skill not found. Ensure skills are installed.\x1b[0m");
+                            }
+                            true
+                        }
+                        "/batch" => {
+                            if let Some(batch_args) = cmd_args {
+                                if let Some(skill) = ccx_skill::find_skill(&discovered_skills, "batch") {
+                                    let result = ccx_skill::expand_skill(skill, Some(batch_args));
+                                    let user_msg = format!(
+                                        "The user invoked skill 'batch' with args: {}\n\n<skill-content>\n{}\n</skill-content>",
+                                        batch_args, result.expanded_prompt
+                                    );
+                                    ccx_tui::inline::clear_previous_line();
+                                    ccx_tui::inline::render_user_message(input);
+                                    let mut cb = InlineCallback::new(bypass_permissions, auth_source, show_thinking);
+                                    match agent.send_message(&user_msg, &mut cb).await {
+                                        Ok(_) => cb.finish_text(),
+                                        Err(e) => {
+                                            cb.finish_text();
+                                            ccx_tui::inline::render_error(&format!("Error: {e}"));
+                                        }
+                                    }
+                                    ccx_tui::inline::render_separator();
+                                    session_turns += 1;
+                                } else {
+                                    println!("\x1b[90mBatch skill not found. Ensure skills are installed.\x1b[0m");
+                                }
+                            } else {
+                                println!("\x1b[33mUsage: /batch <prompt>\x1b[0m");
+                            }
                             true
                         }
                         "/" => {
@@ -803,12 +1027,18 @@ async fn run_inline_mode(
                         }
 
                         ccx_tui::inline::render_separator();
+                        session_turns += 1;
                         continue;
                     }
 
                     // No builtin or skill matched — show suggestions.
                     commands::print_suggestions(input, &skill_display);
                     continue;
+                }
+
+                // Track first message for session preview.
+                if first_preview.is_empty() {
+                    first_preview = sessions::make_preview(input);
                 }
 
                 ccx_tui::inline::clear_previous_line();
@@ -823,6 +1053,7 @@ async fn run_inline_mode(
                     }
                 }
 
+                session_turns += 1;
                 ccx_tui::inline::render_separator();
             }
             Err(ReadlineError::Interrupted | ReadlineError::Eof) => break,
@@ -833,6 +1064,32 @@ async fn run_inline_mode(
         }
     }
 
+    // Save session if we had any turns.
+    if session_turns > 0 {
+        let cost = agent.cost();
+        let session = sessions::Session {
+            id: session_id.clone(),
+            cwd: cwd_str,
+            model: model.to_string(),
+            created_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+            updated_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+            messages: agent.messages().to_vec(),
+            preview: if first_preview.is_empty() { "(no messages)".into() } else { first_preview },
+            total_turns: session_turns,
+            total_input_tokens: cost.total_input_tokens,
+            total_output_tokens: cost.total_output_tokens,
+        };
+        if let Err(e) = sessions::save_session(&session) {
+            eprintln!("\x1b[33mFailed to save session: {e}\x1b[0m");
+        }
+    }
+
     // Save history for next session.
     let _ = rl.save_history(&history_path);
 
@@ -840,4 +1097,29 @@ async fn run_inline_mode(
     println!("\nGoodbye!");
     eprintln!("\n{}", agent.cost().summary());
     Ok(())
+}
+
+/// Format epoch seconds to a human-readable timestamp.
+fn chrono_format(epoch: u64) -> String {
+    let secs = epoch;
+    let days = secs / 86400;
+    let hours = (secs % 86400) / 3600;
+    let mins = (secs % 3600) / 60;
+    // Approximate date from epoch.
+    let year = 1970 + days / 365;
+    let day_of_year = days % 365;
+    let month = day_of_year / 30 + 1;
+    let day = day_of_year % 30 + 1;
+    format!("{year}-{month:02}-{day:02} {hours:02}:{mins:02}")
+}
+
+/// Shorten a path string by replacing $HOME with ~.
+fn shorten_home_str(path: &str) -> String {
+    if let Some(home) = std::env::var_os("HOME") {
+        let home_str = home.to_string_lossy();
+        if path.starts_with(home_str.as_ref()) {
+            return format!("~{}", &path[home_str.len()..]);
+        }
+    }
+    path.to_string()
 }

@@ -84,6 +84,8 @@ pub enum ContentBlock {
     #[serde(rename = "thinking")]
     Thinking {
         thinking: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        signature: Option<String>,
     },
 }
 

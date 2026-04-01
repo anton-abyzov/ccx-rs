@@ -16,7 +16,10 @@ enum PendingBlock {
         name: String,
         json_buf: String,
     },
-    Thinking(String),
+    Thinking {
+        text: String,
+        signature: Option<String>,
+    },
     Other,
 }
 
@@ -207,7 +210,7 @@ impl AgentLoop {
                     ContentBlock::Text { text } => text.len(),
                     ContentBlock::ToolUse { input, .. } => input.to_string().len(),
                     ContentBlock::ToolResult { content, .. } => content.len(),
-                    ContentBlock::Thinking { thinking } => thinking.len(),
+                    ContentBlock::Thinking { thinking, .. } => thinking.len(),
                 })
                 .sum(),
         }
@@ -280,9 +283,9 @@ impl AgentLoop {
                         });
                         tool_calls.push((id, name, input));
                     }
-                    PendingBlock::Thinking(thinking) => {
+                    PendingBlock::Thinking { text: thinking, signature } => {
                         if !thinking.is_empty() {
-                            content.push(ContentBlock::Thinking { thinking });
+                            content.push(ContentBlock::Thinking { thinking, signature });
                         }
                     }
                     PendingBlock::Other => {}
@@ -484,8 +487,8 @@ impl AgentLoop {
                                 json_buf: String::new(),
                             }
                         }
-                        ContentBlock::Thinking { thinking } => {
-                            PendingBlock::Thinking(thinking)
+                        ContentBlock::Thinking { thinking, .. } => {
+                            PendingBlock::Thinking { text: thinking, signature: None }
                         }
                         _ => PendingBlock::Other,
                     };
@@ -507,11 +510,17 @@ impl AgentLoop {
                                 json_buf.push_str(&partial_json);
                             }
                             (
-                                PendingBlock::Thinking(buf),
+                                PendingBlock::Thinking { text: buf, .. },
                                 Delta::ThinkingDelta { thinking },
                             ) => {
                                 buf.push_str(&thinking);
                                 callback.on_thinking(&thinking);
+                            }
+                            (
+                                PendingBlock::Thinking { signature: sig, .. },
+                                Delta::SignatureDelta { signature },
+                            ) => {
+                                *sig = Some(signature);
                             }
                             _ => {}
                         }
