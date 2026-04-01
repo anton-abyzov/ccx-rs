@@ -43,6 +43,9 @@ pub fn load_skill(path: &Path) -> Result<Skill, SkillError> {
 }
 
 /// Parse skill content from markdown with YAML frontmatter.
+///
+/// The name is derived from the directory path if not present in frontmatter,
+/// since SpecWeave SKILL.md files don't include a `name:` field.
 fn parse_skill_content(raw: &str, source_path: &Path) -> Result<Skill, SkillError> {
     let Some(rest) = raw.strip_prefix("---\n") else {
         return Err(SkillError::Parse("missing frontmatter".into()));
@@ -55,10 +58,15 @@ fn parse_skill_content(raw: &str, source_path: &Path) -> Result<Skill, SkillErro
     let frontmatter = &rest[..end];
     let prompt = rest[end + 4..].trim().to_string();
 
-    let name = extract_field(frontmatter, "name");
+    let mut name = extract_field(frontmatter, "name");
     let description = extract_field(frontmatter, "description");
     let mode_str = extract_field(frontmatter, "mode");
     let trigger_str = extract_field(frontmatter, "trigger");
+
+    // Derive name from directory path when frontmatter has no name field.
+    if name.is_empty() {
+        name = derive_skill_name(source_path).unwrap_or_default();
+    }
 
     if name.is_empty() {
         return Err(SkillError::Parse("skill must have a name".into()));
@@ -86,6 +94,47 @@ fn parse_skill_content(raw: &str, source_path: &Path) -> Result<Skill, SkillErro
         prompt,
         source_path: source_path.to_path_buf(),
     })
+}
+
+/// Derive a skill name from the file path.
+///
+/// - `plugins/specweave/skills/team-lead/SKILL.md` → `sw:team-lead`
+/// - `plugins/{other}/skills/do/SKILL.md` → `{prefix}:do`
+/// - `~/.claude/skills/nanobanana/SKILL.md` → `nanobanana`
+/// - `.claude/skills/slack-messaging/SKILL.md` → `slack-messaging`
+/// - `~/.claude/skills/foo.md` → `foo` (flat file)
+fn derive_skill_name(path: &Path) -> Option<String> {
+    let path_str = path.to_string_lossy();
+
+    // For SKILL.md in a subdirectory, use the parent directory name
+    if path.file_name().and_then(|f| f.to_str()) == Some("SKILL.md") {
+        let parent = path.parent()?;
+        let dir_name = parent.file_name()?.to_str()?;
+
+        if path_str.contains("plugins/specweave/skills/") {
+            return Some(format!("sw:{}", dir_name));
+        }
+        if let Some(prefix) = extract_plugin_prefix(&path_str) {
+            return Some(format!("{}:{}", prefix, dir_name));
+        }
+        return Some(dir_name.to_string());
+    }
+
+    // For flat .md files, use the filename without extension
+    path.file_stem()?.to_str().map(|s| s.to_string())
+}
+
+/// Extract a short prefix from a plugin path.
+/// `plugins/{name}/skills/` → first 3 chars of `{name}` as prefix.
+fn extract_plugin_prefix(path: &str) -> Option<String> {
+    let idx = path.find("plugins/")?;
+    let after = &path[idx + 8..];
+    let slash = after.find('/')?;
+    let plugin_name = &after[..slash];
+    if plugin_name == "specweave" {
+        return None;
+    }
+    Some(plugin_name.chars().take(3).collect())
 }
 
 /// Load all skills from a directory.
@@ -221,10 +270,58 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_skill_missing_name() {
+    fn test_parse_skill_name_from_directory() {
+        // SpecWeave SKILL.md files have no name: field — derive from path
+        let content = "---\ndescription: Phase orchestrator\n---\n\nDo the thing.\n";
+        let skill = parse_skill_content(
+            content,
+            Path::new("/home/user/.nvm/versions/node/v22/lib/node_modules/specweave/plugins/specweave/skills/team-lead/SKILL.md"),
+        )
+        .unwrap();
+        assert_eq!(skill.name, "sw:team-lead");
+        assert_eq!(skill.description, "Phase orchestrator");
+    }
+
+    #[test]
+    fn test_parse_skill_name_user_skill() {
+        let content = "---\ndescription: My custom skill\n---\n\nprompt\n";
+        let skill = parse_skill_content(
+            content,
+            Path::new("/home/user/.claude/skills/nanobanana/SKILL.md"),
+        )
+        .unwrap();
+        assert_eq!(skill.name, "nanobanana");
+    }
+
+    #[test]
+    fn test_parse_skill_name_other_plugin() {
+        let content = "---\ndescription: Frontend design\n---\n\nprompt\n";
+        let skill = parse_skill_content(
+            content,
+            Path::new("/home/user/.nvm/versions/node/v22/lib/node_modules/specweave/plugins/frontend-design/skills/frontend-design/SKILL.md"),
+        )
+        .unwrap();
+        assert_eq!(skill.name, "fro:frontend-design");
+    }
+
+    #[test]
+    fn test_parse_skill_missing_name_no_path() {
+        // Still fails if no name in frontmatter AND path can't derive one
         let content = "---\ndescription: no name\n---\n\nprompt\n";
-        let err = parse_skill_content(content, Path::new("test.md")).unwrap_err();
+        let err = parse_skill_content(content, Path::new("/")).unwrap_err();
         assert!(matches!(err, SkillError::Parse(_)));
+    }
+
+    #[test]
+    fn test_parse_skill_explicit_name_wins() {
+        // If frontmatter has name:, it takes precedence over path
+        let content = "---\nname: custom-name\ndescription: A test\n---\n\nprompt\n";
+        let skill = parse_skill_content(
+            content,
+            Path::new("/home/user/.claude/skills/other-name/SKILL.md"),
+        )
+        .unwrap();
+        assert_eq!(skill.name, "custom-name");
     }
 
     #[test]
@@ -238,9 +335,10 @@ mod tests {
     fn test_load_from_dir() {
         let dir = std::env::temp_dir().join("ccx_test_skills");
         let _ = fs::create_dir_all(&dir);
+        // Flat .md files derive name from filename
         fs::write(
             dir.join("skill1.md"),
-            "---\nname: s1\ndescription: first\n---\n\nPrompt 1\n",
+            "---\ndescription: first\n---\n\nPrompt 1\n",
         )
         .unwrap();
         fs::write(
@@ -251,7 +349,35 @@ mod tests {
 
         let skills = load_skills_from_dir(&dir).unwrap();
         assert_eq!(skills.len(), 2);
+        // skill1.md has no name: field, so name derived from filename
+        assert!(skills.iter().any(|s| s.name == "skill1"));
+        // skill2.md has explicit name
+        assert!(skills.iter().any(|s| s.name == "s2"));
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_derive_skill_name() {
+        assert_eq!(
+            derive_skill_name(Path::new("/a/plugins/specweave/skills/do/SKILL.md")),
+            Some("sw:do".to_string())
+        );
+        assert_eq!(
+            derive_skill_name(Path::new("/a/plugins/specweave/skills/increment/SKILL.md")),
+            Some("sw:increment".to_string())
+        );
+        assert_eq!(
+            derive_skill_name(Path::new("/a/.claude/skills/nanobanana/SKILL.md")),
+            Some("nanobanana".to_string())
+        );
+        assert_eq!(
+            derive_skill_name(Path::new("/a/plugins/myplug/skills/foo/SKILL.md")),
+            Some("myp:foo".to_string())
+        );
+        assert_eq!(
+            derive_skill_name(Path::new("/a/skills/bar.md")),
+            Some("bar".to_string())
+        );
     }
 }
