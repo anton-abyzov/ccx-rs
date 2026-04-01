@@ -34,7 +34,7 @@ enum Commands {
         prompt: Option<String>,
 
         /// Permission mode (default, plan, bypass, dontask, acceptedits, auto)
-        #[arg(long, default_value = "default")]
+        #[arg(long, default_value = "bypass")]
         permission_mode: String,
 
         /// Maximum turns per conversation exchange
@@ -44,6 +44,10 @@ enum Commands {
         /// Use full-screen TUI instead of inline rendering
         #[arg(long)]
         tui: bool,
+
+        /// Skip all permission prompts (bypass mode)
+        #[arg(long)]
+        dangerously_skip_permissions: bool,
     },
     /// Show version and crate information
     Info,
@@ -61,6 +65,7 @@ async fn main() {
             permission_mode,
             max_turns,
             tui,
+            dangerously_skip_permissions,
         } => {
             if let Err(e) = run_chat(
                 &model,
@@ -69,6 +74,7 @@ async fn main() {
                 &permission_mode,
                 max_turns,
                 tui,
+                dangerously_skip_permissions,
             )
             .await
             {
@@ -107,6 +113,7 @@ async fn run_chat(
     permission_mode: &str,
     max_turns: usize,
     use_tui: bool,
+    dangerously_skip_permissions: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Resolve authentication (API key or OAuth token from Claude Code).
     let auth = ccx_auth::resolve_auth(explicit_key)?;
@@ -122,8 +129,12 @@ async fn run_chat(
         "dontask" => ccx_permission::PermissionMode::DontAsk,
         "acceptedits" => ccx_permission::PermissionMode::AcceptEdits,
         "auto" => ccx_permission::PermissionMode::Auto,
-        _ => settings.permissions.mode.unwrap_or_default(),
+        "default" => ccx_permission::PermissionMode::Default,
+        _ => settings.permissions.mode.unwrap_or(ccx_permission::PermissionMode::BypassPermissions),
     };
+
+    // Bypass permissions when flag is set or mode allows it.
+    let bypass_permissions = dangerously_skip_permissions || mode.allows_writes();
 
     // Build tool registry.
     let mut registry = ccx_core::ToolRegistry::new();
@@ -168,12 +179,11 @@ async fn run_chat(
         if use_tui {
             run_tui_mode(&mut agent, model, &auth_source, &cwd_display, tool_count).await?;
         } else {
-            run_inline_mode(&mut agent, model, &auth_source, &cwd_display, &tool_names).await?;
+            run_inline_mode(&mut agent, model, &auth_source, &cwd_display, &tool_names, bypass_permissions).await?;
         }
     }
 
     // Suppress unused imports for crates wired but not directly called here.
-    let _ = mode;
     let _ = ccx_memory::MemoryType::User;
     let _ = ccx_compact::DEFAULT_THRESHOLD;
     let _ = ccx_sandbox::create_sandbox();
@@ -409,14 +419,16 @@ struct InlineCallback {
     text_buffer: String,
     spinner_shown: bool,
     always_allow: HashSet<String>,
+    bypass_permissions: bool,
 }
 
 impl InlineCallback {
-    fn new() -> Self {
+    fn new(bypass_permissions: bool) -> Self {
         Self {
             text_buffer: String::new(),
             spinner_shown: false,
             always_allow: HashSet::new(),
+            bypass_permissions,
         }
     }
 
@@ -484,7 +496,7 @@ impl ccx_core::AgentCallback for InlineCallback {
     }
 
     fn should_allow_tool(&mut self, name: &str, input: &serde_json::Value) -> bool {
-        if self.always_allow.contains(name) {
+        if self.bypass_permissions || self.always_allow.contains(name) {
             return true;
         }
         let detail = extract_tool_detail(name, input);
@@ -506,6 +518,7 @@ async fn run_inline_mode(
     auth_source: &str,
     cwd_display: &str,
     tool_names: &[String],
+    bypass_permissions: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let tool_count = tool_names.len();
     ccx_tui::inline::render_welcome(model, auth_source, cwd_display, tool_count);
@@ -622,9 +635,10 @@ async fn run_inline_mode(
                             )
                         };
 
+                        ccx_tui::inline::clear_previous_line();
                         ccx_tui::inline::render_user_message(input);
 
-                        let mut cb = InlineCallback::new();
+                        let mut cb = InlineCallback::new(bypass_permissions);
                         match agent.send_message(&user_msg, &mut cb).await {
                             Ok(_) => cb.finish_text(),
                             Err(e) => {
@@ -642,9 +656,10 @@ async fn run_inline_mode(
                     continue;
                 }
 
+                ccx_tui::inline::clear_previous_line();
                 ccx_tui::inline::render_user_message(input);
 
-                let mut cb = InlineCallback::new();
+                let mut cb = InlineCallback::new(bypass_permissions);
                 match agent.send_message(input, &mut cb).await {
                     Ok(_) => cb.finish_text(),
                     Err(e) => {

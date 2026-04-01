@@ -6,6 +6,7 @@ pub mod file_write;
 pub mod glob_tool;
 pub mod grep;
 pub mod notebook_edit;
+pub mod team_create;
 pub mod todo_write;
 pub mod web_fetch;
 pub mod web_search;
@@ -18,6 +19,7 @@ pub use file_write::FileWriteTool;
 pub use glob_tool::GlobTool;
 pub use grep::GrepTool;
 pub use notebook_edit::NotebookEditTool;
+pub use team_create::TeamCreateTool;
 pub use todo_write::TodoWriteTool;
 pub use web_fetch::WebFetchTool;
 pub use web_search::WebSearchTool;
@@ -35,6 +37,7 @@ pub fn register_all(registry: &mut ccx_core::ToolRegistry) {
     registry.register(Box::new(AgentTool));
     registry.register(Box::new(TodoWriteTool));
     registry.register(Box::new(NotebookEditTool));
+    registry.register(Box::new(TeamCreateTool));
 }
 
 #[cfg(test)]
@@ -56,12 +59,13 @@ mod tests {
         assert!(registry.get("Agent").is_some());
         assert!(registry.get("TodoWrite").is_some());
         assert!(registry.get("NotebookEdit").is_some());
+        assert!(registry.get("TeamCreate").is_some());
     }
 
     #[test]
     fn test_register_all_count() {
         let mut registry = ccx_core::ToolRegistry::new();
         register_all(&mut registry);
-        assert_eq!(registry.names().len(), 11);
+        assert_eq!(registry.names().len(), 12);
     }
 }

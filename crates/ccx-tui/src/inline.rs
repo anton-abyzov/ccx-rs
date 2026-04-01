@@ -175,31 +175,34 @@ pub fn render_tool_start(name: &str, detail: &str) {
 
 /// Print tool output/result with collapsible long output.
 /// Shows first 3 lines + "[+N more lines]" when output exceeds 5 lines.
+/// Uses `✗` marker for failed tools.
 pub fn render_tool_end(success: bool, preview: &str) {
     if preview.is_empty() {
         if success {
             println!("  {DIM}└ done{RESET}");
         } else {
-            println!("  {RED}└ error{RESET}");
+            println!("  {RED}✗ error{RESET}");
         }
         return;
     }
 
     let color = if success { DIM } else { RED };
+    let prefix = if success { "└" } else { "✗" };
     let lines: Vec<&str> = preview.lines().collect();
     let total = lines.len();
     let max_visible = 3;
 
     let display_lines = if total > 5 { &lines[..max_visible] } else { &lines[..] };
 
-    for line in display_lines {
+    for (i, line) in display_lines.iter().enumerate() {
         let display = if line.chars().count() > 120 {
             let truncated: String = line.chars().take(117).collect();
             format!("{truncated}...")
         } else {
             line.to_string()
         };
-        println!("  {color}└ {display}{RESET}");
+        let marker = if i == 0 { prefix } else { "└" };
+        println!("  {color}{marker} {display}{RESET}");
     }
 
     if total > 5 {
@@ -211,6 +214,13 @@ pub fn render_tool_end(success: bool, preview: &str) {
 /// Print streaming assistant text (no trailing newline).
 pub fn render_text(text: &str) {
     print!("{text}");
+    io::stdout().flush().unwrap();
+}
+
+/// Clear the previous line (moves cursor up and erases).
+/// Used after rustyline echo to replace with styled user message.
+pub fn clear_previous_line() {
+    print!("\x1b[A\x1b[2K\r");
     io::stdout().flush().unwrap();
 }
 
