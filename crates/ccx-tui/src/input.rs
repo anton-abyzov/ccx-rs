@@ -1,5 +1,6 @@
 use ratatui::layout::Rect;
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 use crate::style::Theme;
@@ -68,23 +69,48 @@ impl Default for InputState {
     }
 }
 
-/// Render the input area.
+/// Render the input area with `❯ ` prompt and separator line above.
 pub fn render_input(frame: &mut Frame, area: Rect, state: &InputState) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Theme::border())
-        .title(" Input ");
+    // Separator line at the top of the input area.
+    if area.height >= 2 {
+        let sep_area = Rect {
+            x: area.x,
+            y: area.y,
+            width: area.width,
+            height: 1,
+        };
+        let sep = Paragraph::new(Line::from(Span::styled(
+            "─".repeat(area.width as usize),
+            Theme::separator(),
+        )));
+        frame.render_widget(sep, sep_area);
+    }
 
-    let paragraph = Paragraph::new(state.text.as_str())
-        .block(block)
-        .style(Theme::input_area());
+    // Input line below the separator.
+    let input_y = if area.height >= 2 {
+        area.y + 1
+    } else {
+        area.y
+    };
+    let input_area = Rect {
+        x: area.x,
+        y: input_y,
+        width: area.width,
+        height: 1,
+    };
 
-    frame.render_widget(paragraph, area);
+    let line = Line::from(vec![
+        Span::styled("❯ ", Theme::input_prompt()),
+        Span::styled(state.text.as_str(), Theme::input_area()),
+    ]);
 
-    // Place cursor.
-    let x = area.x + 1 + state.cursor_pos as u16;
-    let y = area.y + 1;
-    frame.set_cursor_position((x, y));
+    let paragraph = Paragraph::new(line);
+    frame.render_widget(paragraph, input_area);
+
+    // Place cursor after the prompt prefix ("❯ " is 2 display columns).
+    let cursor_x = area.x + 2 + state.cursor_pos as u16;
+    let cursor_y = input_y;
+    frame.set_cursor_position((cursor_x, cursor_y));
 }
 
 #[cfg(test)]

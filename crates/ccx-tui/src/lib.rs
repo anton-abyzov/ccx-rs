@@ -2,10 +2,12 @@ pub mod app;
 pub mod chat;
 pub mod input;
 pub mod style;
+pub mod welcome;
 
-pub use app::{render, App};
+pub use app::{render, App, Screen};
 pub use chat::{ChatMessage, ChatRole};
 pub use input::InputState;
+pub use welcome::WelcomeInfo;
 
 use std::io;
 use std::sync::mpsc;
@@ -13,7 +15,7 @@ use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
-use crossterm::{execute, cursor};
+use crossterm::{cursor, execute};
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 
@@ -27,7 +29,11 @@ pub enum TuiEvent {
     /// A tool started executing.
     ToolStart { name: String, detail: String },
     /// A tool finished executing.
-    ToolEnd { name: String, success: bool, preview: String },
+    ToolEnd {
+        name: String,
+        success: bool,
+        preview: String,
+    },
     /// Update the status bar.
     SetStatus(String),
     /// Signal the TUI to shut down.
@@ -43,17 +49,24 @@ pub enum TuiInput {
     Quit,
 }
 
-/// Run the TUI event loop. This function blocks the calling thread.
-///
-/// - `events_rx`: Receives events from the agent (messages, tool status, etc.)
-/// - `input_tx`: Sends user input back to the agent loop
-///
-/// Returns when the user quits or an error occurs.
+/// Run the TUI event loop with default welcome info.
 pub fn run_tui(
     events_rx: mpsc::Receiver<TuiEvent>,
     input_tx: mpsc::Sender<TuiInput>,
 ) -> io::Result<()> {
-    // Set up terminal.
+    run_tui_configured(events_rx, input_tx, WelcomeInfo::default())
+}
+
+/// Run the TUI event loop with custom welcome info. Blocks the calling thread.
+///
+/// - `events_rx`: Receives events from the agent (messages, tool status, etc.)
+/// - `input_tx`: Sends user input back to the agent loop
+/// - `welcome`: Configuration for the welcome screen
+pub fn run_tui_configured(
+    events_rx: mpsc::Receiver<TuiEvent>,
+    input_tx: mpsc::Sender<TuiInput>,
+    welcome: WelcomeInfo,
+) -> io::Result<()> {
     terminal::enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, cursor::Hide)?;
@@ -61,12 +74,10 @@ pub fn run_tui(
     let mut terminal = Terminal::new(backend)?;
 
     let mut app_state = App::new();
-    app_state.status = "Ready — type your message and press Enter".into();
+    app_state.welcome = welcome;
 
-    // Main event loop.
     let result = run_event_loop(&mut terminal, &mut app_state, &events_rx, &input_tx);
 
-    // Restore terminal — always runs even on error.
     terminal::disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen, cursor::Show)?;
 
@@ -87,10 +98,17 @@ fn run_event_loop(
         while let Ok(event) = events_rx.try_recv() {
             match event {
                 TuiEvent::NewMessage(msg) => {
+                    // Transition to chat on first message.
+                    if app.screen == Screen::Welcome {
+                        app.enter_chat();
+                    }
                     app.messages.push(msg);
                     auto_scroll(app);
                 }
                 TuiEvent::StreamText(text) => {
+                    if app.screen == Screen::Welcome {
+                        app.enter_chat();
+                    }
                     // Append to the last assistant message, or create one.
                     if let Some(last) = app.messages.last_mut() {
                         if last.role == ChatRole::Assistant {
@@ -115,10 +133,13 @@ fn run_event_loop(
                         role: ChatRole::Tool,
                         content: msg,
                     });
-                    app.status = format!("Running: {name}...");
                     auto_scroll(app);
                 }
-                TuiEvent::ToolEnd { name, success, preview } => {
+                TuiEvent::ToolEnd {
+                    name,
+                    success,
+                    preview,
+                } => {
                     let status_str = if success { "ok" } else { "error" };
                     let msg = if preview.is_empty() {
                         format!("[{name}: {status_str}]")
@@ -126,14 +147,18 @@ fn run_event_loop(
                         format!("[{name}: {status_str}] {preview}")
                     };
                     app.messages.push(ChatMessage {
-                        role: if success { ChatRole::Tool } else { ChatRole::Error },
+                        role: if success {
+                            ChatRole::Tool
+                        } else {
+                            ChatRole::Error
+                        },
                         content: msg,
                     });
-                    app.status = "Ready".into();
                     auto_scroll(app);
                 }
                 TuiEvent::SetStatus(s) => {
-                    app.status = s;
+                    // Status is shown via footer now; could extend later.
+                    let _ = s;
                 }
                 TuiEvent::Quit => {
                     app.should_quit = true;
@@ -151,9 +176,7 @@ fn run_event_loop(
             if let Event::Key(key) = event::read()? {
                 match key.code {
                     // Ctrl+C: quit.
-                    KeyCode::Char('c')
-                        if key.modifiers.contains(KeyModifiers::CONTROL) =>
-                    {
+                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                         let _ = input_tx.send(TuiInput::Quit);
                         app.should_quit = true;
                     }
@@ -171,11 +194,14 @@ fn run_event_loop(
                     KeyCode::Enter => {
                         let text = app.input.clear();
                         if !text.is_empty() {
+                            // Transition to chat on first user input.
+                            if app.screen == Screen::Welcome {
+                                app.enter_chat();
+                            }
                             app.messages.push(ChatMessage {
                                 role: ChatRole::User,
                                 content: text.clone(),
                             });
-                            app.status = "Thinking...".into();
                             auto_scroll(app);
                             let _ = input_tx.send(TuiInput::Message(text));
                         }
@@ -216,16 +242,12 @@ fn run_event_loop(
                     }
 
                     // Ctrl+L: clear screen (re-render).
-                    KeyCode::Char('l')
-                        if key.modifiers.contains(KeyModifiers::CONTROL) =>
-                    {
+                    KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                         terminal.clear()?;
                     }
 
                     // Ctrl+U: clear input line.
-                    KeyCode::Char('u')
-                        if key.modifiers.contains(KeyModifiers::CONTROL) =>
-                    {
+                    KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                         app.input.clear();
                     }
 
@@ -240,11 +262,6 @@ fn run_event_loop(
                     _ => {}
                 }
             }
-
-            // Handle terminal resize.
-            if let Event::Resize(_, _) = event::read().unwrap_or(Event::FocusGained) {
-                // Terminal will re-render on next loop iteration.
-            }
         }
     }
 
@@ -253,13 +270,11 @@ fn run_event_loop(
 
 /// Auto-scroll to bottom when new content is added.
 fn auto_scroll(app: &mut App) {
-    // Calculate total lines from messages (rough estimate).
     let total_lines: u16 = app
         .messages
         .iter()
-        .map(|m| m.content.lines().count().max(1) as u16 + 1)
+        .map(|m| m.content.lines().count().max(1) as u16 + 1) // +1 for separator
         .sum();
-    // Scroll to show the latest content.
     if total_lines > 10 {
         app.scroll = total_lines.saturating_sub(10);
     }

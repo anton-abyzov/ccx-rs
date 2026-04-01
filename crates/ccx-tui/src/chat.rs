@@ -1,6 +1,6 @@
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use ratatui::widgets::{Paragraph, Wrap};
 use ratatui::Frame;
 
 use crate::style::Theme;
@@ -22,38 +22,64 @@ pub enum ChatRole {
 
 /// Render chat messages into the given area.
 pub fn render_chat(frame: &mut Frame, area: Rect, messages: &[ChatMessage], scroll: u16) {
-    let lines: Vec<Line> = messages
-        .iter()
-        .flat_map(|msg| {
-            let (prefix, style) = match msg.role {
-                ChatRole::User => ("> ", Theme::user_message()),
-                ChatRole::Assistant => ("  ", Theme::assistant_message()),
-                ChatRole::Tool => ("  [tool] ", Theme::tool_output()),
-                ChatRole::Error => ("  ERROR: ", Theme::error()),
-            };
+    let mut lines: Vec<Line> = Vec::new();
 
-            let mut result: Vec<Line> = Vec::new();
-            for line in msg.content.lines() {
-                result.push(Line::from(vec![
-                    Span::styled(prefix, style),
-                    Span::styled(line.to_string(), style),
-                ]));
+    for msg in messages {
+        match msg.role {
+            ChatRole::User => {
+                // User: `❯ text` in cyan.
+                for line in msg.content.lines() {
+                    lines.push(Line::from(vec![
+                        Span::styled("❯ ", Theme::user_message()),
+                        Span::styled(line.to_string(), Theme::user_message()),
+                    ]));
+                }
             }
-            if result.is_empty() {
-                result.push(Line::from(Span::styled(prefix, style)));
+            ChatRole::Assistant => {
+                // Assistant: `● text` in white.
+                let mut first = true;
+                for line in msg.content.lines() {
+                    let prefix = if first { "● " } else { "  " };
+                    first = false;
+                    lines.push(Line::from(vec![
+                        Span::styled(prefix, Theme::assistant_message()),
+                        Span::styled(line.to_string(), Theme::assistant_message()),
+                    ]));
+                }
+                if msg.content.is_empty() {
+                    lines.push(Line::from(Span::styled("● ", Theme::assistant_message())));
+                }
             }
-            result.push(Line::from("")); // blank line between messages
-            result
-        })
-        .collect();
+            ChatRole::Tool => {
+                // Tool: `⚙ ToolName` in yellow with detail below.
+                for line in msg.content.lines() {
+                    lines.push(Line::from(vec![
+                        Span::styled("⚙ ", Theme::tool_name()),
+                        Span::styled(line.to_string(), Theme::tool_output()),
+                    ]));
+                }
+            }
+            ChatRole::Error => {
+                for line in msg.content.lines() {
+                    lines.push(Line::from(vec![
+                        Span::styled("✗ ", Theme::error()),
+                        Span::styled(line.to_string(), Theme::error()),
+                    ]));
+                }
+            }
+        }
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Theme::border())
-        .title(" Chat ");
+        // Separator between messages.
+        let sep_width = area.width.saturating_sub(4) as usize;
+        if sep_width > 0 {
+            lines.push(Line::from(Span::styled(
+                "─".repeat(sep_width),
+                Theme::separator(),
+            )));
+        }
+    }
 
     let paragraph = Paragraph::new(lines)
-        .block(block)
         .wrap(Wrap { trim: false })
         .scroll((scroll, 0));
 

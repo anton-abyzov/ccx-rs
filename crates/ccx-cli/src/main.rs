@@ -1,4 +1,5 @@
 use std::io::Write;
+use std::sync::mpsc;
 
 use clap::{Parser, Subcommand};
 
@@ -134,39 +135,36 @@ async fn run_chat(
         &tool_schemas,
     );
 
-    // Print startup info.
-    match &resolved.source {
-        ccx_auth::KeySource::EnvVar => eprintln!("Using API key from ANTHROPIC_API_KEY"),
-        ccx_auth::KeySource::ConfigFile(path) => {
-            eprintln!("Using API key from {}", path.display())
-        }
-        ccx_auth::KeySource::Explicit => eprintln!("Using provided API key"),
-    }
-    eprintln!(
-        "Model: {model} | Mode: {mode:?} | Tools: {}",
-        registry.names().len()
-    );
-    if !claude_md_files.is_empty() {
-        eprintln!(
-            "CLAUDE.md: {}",
-            claude_md_files
-                .iter()
-                .map(|f| f.path.display().to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
-    }
+    let tool_count = registry.names().len();
 
-    let ctx = ccx_core::ToolContext::new(cwd);
+    let ctx = ccx_core::ToolContext::new(cwd.clone());
     let mut agent = ccx_core::AgentLoop::new(client, registry, ctx, system_prompt);
     agent.set_max_turns(max_turns);
 
     if let Some(text) = prompt {
         // Non-interactive single-shot mode.
+        match &resolved.source {
+            ccx_auth::KeySource::EnvVar => eprintln!("Using API key from ANTHROPIC_API_KEY"),
+            ccx_auth::KeySource::ConfigFile(path) => {
+                eprintln!("Using API key from {}", path.display())
+            }
+            ccx_auth::KeySource::Explicit => eprintln!("Using provided API key"),
+        }
+        eprintln!("Model: {model} | Mode: {mode:?} | Tools: {tool_count}");
         run_single_shot(&mut agent, text).await?;
     } else {
-        // Interactive REPL mode.
-        run_interactive(&mut agent).await?;
+        // Full TUI mode.
+        let auth_source = match &resolved.source {
+            ccx_auth::KeySource::EnvVar => "Env".to_string(),
+            ccx_auth::KeySource::ConfigFile(path) => path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "Config".into()),
+            ccx_auth::KeySource::Explicit => "API Key".into(),
+        };
+        let cwd_display = shorten_home(&cwd);
+
+        run_tui_mode(&mut agent, model, &auth_source, &cwd_display, tool_count).await?;
     }
 
     // Suppress unused imports for crates wired but not directly called here.
@@ -176,6 +174,18 @@ async fn run_chat(
     let _ = ccx_sandbox::create_sandbox();
 
     Ok(())
+}
+
+/// Shorten path by replacing $HOME with ~.
+fn shorten_home(path: &std::path::Path) -> String {
+    if let Some(home) = std::env::var_os("HOME") {
+        let home_str = home.to_string_lossy();
+        let path_str = path.to_string_lossy();
+        if path_str.starts_with(home_str.as_ref()) {
+            return format!("~{}", &path_str[home_str.len()..]);
+        }
+    }
+    path.to_string_lossy().to_string()
 }
 
 /// Run a single prompt and exit.
@@ -190,120 +200,113 @@ async fn run_single_shot(
     Ok(())
 }
 
-/// Run an interactive REPL loop reading from stdin.
-async fn run_interactive(
+/// Run the full TUI with welcome screen, chat, and streaming.
+async fn run_tui_mode(
     agent: &mut ccx_core::AgentLoop,
+    model: &str,
+    auth_source: &str,
+    cwd_display: &str,
+    tool_count: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    eprintln!(
-        "\nccx interactive mode. Type /exit or Ctrl+D to quit, /cost for usage.\n"
-    );
+    let (tui_tx, tui_rx) = mpsc::channel::<ccx_tui::TuiEvent>();
+    let (input_tx, input_rx) = mpsc::channel::<ccx_tui::TuiInput>();
 
-    let mut cb = StreamCallback::new();
+    let welcome = ccx_tui::WelcomeInfo {
+        model: model.to_string(),
+        auth_source: auth_source.to_string(),
+        cwd: cwd_display.to_string(),
+        tool_count,
+    };
 
+    // Spawn TUI thread (blocking — owns the terminal).
+    let tui_handle = std::thread::spawn(move || {
+        ccx_tui::run_tui_configured(tui_rx, input_tx, welcome)
+    });
+
+    // Agent loop: wait for user input, send to API, push events to TUI.
     loop {
-        // Print prompt and flush.
-        eprint!("\x1b[1m> \x1b[0m");
-        std::io::stderr().flush().ok();
-
-        // Read a line from stdin (supports Ctrl+D for EOF).
-        let line = tokio::select! {
-            result = read_stdin_line() => result,
-            _ = tokio::signal::ctrl_c() => {
-                eprintln!("\n\nInterrupted.");
-                break;
-            }
+        let user_input = match input_rx.recv() {
+            Ok(ccx_tui::TuiInput::Message(text)) => text,
+            Ok(ccx_tui::TuiInput::Quit) | Err(_) => break,
         };
 
-        match line {
-            Ok(Some(text)) => {
-                let trimmed = text.trim();
-                if trimmed.is_empty() {
-                    continue;
-                }
+        let mut cb = TuiCallback {
+            tx: tui_tx.clone(),
+        };
 
-                // Handle built-in commands.
-                match trimmed {
-                    "/exit" | "/quit" | "exit" | "quit" => break,
-                    "/cost" => {
-                        eprintln!("{}", agent.cost().summary());
-                        continue;
-                    }
-                    "/clear" => {
-                        eprintln!("Conversation cleared.");
-                        // Note: we can't truly clear the agent's messages
-                        // without creating a new AgentLoop. For now, just
-                        // inform the user.
-                        continue;
-                    }
-                    "/help" => {
-                        print_repl_help();
-                        continue;
-                    }
-                    _ => {}
-                }
-
-                // Send to agent.
-                cb.reset();
-                match agent.send_message(trimmed, &mut cb).await {
-                    Ok(_) => {
-                        // Ensure output ends with a newline.
-                        if cb.chars_printed > 0 {
-                            println!();
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("\n\x1b[31mError: {e}\x1b[0m");
-                    }
-                }
-            }
-            Ok(None) => {
-                // EOF (Ctrl+D).
-                eprintln!("\nGoodbye.");
-                break;
-            }
+        match agent.send_message(&user_input, &mut cb).await {
+            Ok(_) => {}
             Err(e) => {
-                eprintln!("Input error: {e}");
-                break;
+                let _ = tui_tx.send(ccx_tui::TuiEvent::NewMessage(ccx_tui::ChatMessage {
+                    role: ccx_tui::ChatRole::Error,
+                    content: format!("Error: {e}"),
+                }));
             }
         }
     }
 
-    // Print final cost summary.
+    let _ = tui_tx.send(ccx_tui::TuiEvent::Quit);
+    let _ = tui_handle.join();
+
     eprintln!("\n{}", agent.cost().summary());
     Ok(())
 }
 
-/// Read a single line from stdin asynchronously.
-async fn read_stdin_line() -> Result<Option<String>, std::io::Error> {
-    tokio::task::spawn_blocking(|| {
-        let mut buf = String::new();
-        match std::io::stdin().read_line(&mut buf) {
-            Ok(0) => Ok(None),            // EOF
-            Ok(_) => Ok(Some(buf)),
-            Err(e) => Err(e),
-        }
-    })
-    .await
-    .unwrap_or_else(|e| Err(std::io::Error::new(std::io::ErrorKind::Other, e)))
+/// Callback that forwards agent events to the TUI channel.
+struct TuiCallback {
+    tx: mpsc::Sender<ccx_tui::TuiEvent>,
 }
 
-fn print_repl_help() {
-    eprintln!(
-        "\
-Commands:
-  /help     Show this help
-  /cost     Show token usage and cost
-  /clear    Clear conversation
-  /exit     Exit the REPL
+impl ccx_core::AgentCallback for TuiCallback {
+    fn on_text(&mut self, text: &str) {
+        let _ = self
+            .tx
+            .send(ccx_tui::TuiEvent::StreamText(text.to_string()));
+    }
 
-Tips:
-  - Multi-line input: end lines with \\ to continue
-  - Ctrl+C interrupts the current generation
-  - Ctrl+D exits the REPL"
-    );
+    fn on_tool_start(&mut self, name: &str, input: &serde_json::Value) {
+        let detail = extract_tool_detail(name, input);
+        let _ = self.tx.send(ccx_tui::TuiEvent::ToolStart {
+            name: name.to_string(),
+            detail,
+        });
+    }
+
+    fn on_tool_end(
+        &mut self,
+        name: &str,
+        result: &Result<ccx_core::ToolResult, ccx_core::ToolError>,
+    ) {
+        let (success, preview) = match result {
+            Ok(r) if !r.is_error => (true, String::new()),
+            Ok(r) => (false, r.content[..r.content.len().min(200)].to_string()),
+            Err(e) => (false, e.to_string()),
+        };
+        let _ = self.tx.send(ccx_tui::TuiEvent::ToolEnd {
+            name: name.to_string(),
+            success,
+            preview,
+        });
+    }
+
+    fn on_thinking(&mut self, _text: &str) {}
+
+    fn on_retry(&mut self, attempt: u32, delay_ms: u64, reason: &str) {
+        let _ = self
+            .tx
+            .send(ccx_tui::TuiEvent::NewMessage(ccx_tui::ChatMessage {
+                role: ccx_tui::ChatRole::Tool,
+                content: format!(
+                    "[retry {attempt}: {reason}, waiting {:.1}s]",
+                    delay_ms as f64 / 1000.0
+                ),
+            }));
+    }
+
+    fn on_turn_complete(&mut self, _turn: usize, _cost: &ccx_core::CostTracker) {}
 }
 
-/// Streaming callback that prints text to stdout and tool info to stderr.
+/// Streaming callback for single-shot mode (prints to stdout/stderr).
 struct StreamCallback {
     chars_printed: usize,
 }
@@ -311,10 +314,6 @@ struct StreamCallback {
 impl StreamCallback {
     fn new() -> Self {
         Self { chars_printed: 0 }
-    }
-
-    fn reset(&mut self) {
-        self.chars_printed = 0;
     }
 }
 
@@ -326,57 +325,7 @@ impl ccx_core::AgentCallback for StreamCallback {
     }
 
     fn on_tool_start(&mut self, name: &str, input: &serde_json::Value) {
-        // Show a brief description of what the tool is doing.
-        let detail = match name {
-            "Bash" => input["command"]
-                .as_str()
-                .map(|c| {
-                    if c.len() > 60 {
-                        format!("{}...", &c[..57])
-                    } else {
-                        c.to_string()
-                    }
-                })
-                .unwrap_or_default(),
-            "Read" | "Write" | "Edit" => input["file_path"]
-                .as_str()
-                .unwrap_or("")
-                .to_string(),
-            "Glob" => input["pattern"]
-                .as_str()
-                .unwrap_or("")
-                .to_string(),
-            "Grep" => input["pattern"]
-                .as_str()
-                .unwrap_or("")
-                .to_string(),
-            "WebFetch" => input["url"]
-                .as_str()
-                .unwrap_or("")
-                .to_string(),
-            "WebSearch" => input["query"]
-                .as_str()
-                .unwrap_or("")
-                .to_string(),
-            "Agent" => input["description"]
-                .as_str()
-                .unwrap_or("")
-                .to_string(),
-            "TodoWrite" => {
-                let count = input["todos"]
-                    .as_array()
-                    .map(|a| a.len())
-                    .unwrap_or(0);
-                format!("{count} items")
-            }
-            "NotebookEdit" => {
-                let path = input["notebook_path"].as_str().unwrap_or("");
-                let idx = input["cell_index"].as_u64().unwrap_or(0);
-                format!("{path} cell {idx}")
-            }
-            _ => String::new(),
-        };
-
+        let detail = extract_tool_detail(name, input);
         if detail.is_empty() {
             eprintln!("\n\x1b[33m[{name}]\x1b[0m");
         } else {
@@ -403,9 +352,7 @@ impl ccx_core::AgentCallback for StreamCallback {
         }
     }
 
-    fn on_thinking(&mut self, _text: &str) {
-        // Could optionally show thinking indicator.
-    }
+    fn on_thinking(&mut self, _text: &str) {}
 
     fn on_retry(&mut self, attempt: u32, delay_ms: u64, reason: &str) {
         eprintln!(
@@ -414,7 +361,40 @@ impl ccx_core::AgentCallback for StreamCallback {
         );
     }
 
-    fn on_turn_complete(&mut self, _turn: usize, _cost: &ccx_core::CostTracker) {
-        // Could show per-turn cost.
+    fn on_turn_complete(&mut self, _turn: usize, _cost: &ccx_core::CostTracker) {}
+}
+
+/// Extract a human-readable detail string for tool start events.
+fn extract_tool_detail(name: &str, input: &serde_json::Value) -> String {
+    match name {
+        "Bash" => input["command"]
+            .as_str()
+            .map(|c| {
+                if c.len() > 60 {
+                    format!("{}...", &c[..57])
+                } else {
+                    c.to_string()
+                }
+            })
+            .unwrap_or_default(),
+        "Read" | "Write" | "Edit" => input["file_path"]
+            .as_str()
+            .unwrap_or("")
+            .to_string(),
+        "Glob" => input["pattern"].as_str().unwrap_or("").to_string(),
+        "Grep" => input["pattern"].as_str().unwrap_or("").to_string(),
+        "WebFetch" => input["url"].as_str().unwrap_or("").to_string(),
+        "WebSearch" => input["query"].as_str().unwrap_or("").to_string(),
+        "Agent" => input["description"].as_str().unwrap_or("").to_string(),
+        "TodoWrite" => {
+            let count = input["todos"].as_array().map(|a| a.len()).unwrap_or(0);
+            format!("{count} items")
+        }
+        "NotebookEdit" => {
+            let path = input["notebook_path"].as_str().unwrap_or("");
+            let idx = input["cell_index"].as_u64().unwrap_or(0);
+            format!("{path} cell {idx}")
+        }
+        _ => String::new(),
     }
 }
