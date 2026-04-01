@@ -1,10 +1,13 @@
 mod commands;
+mod completer;
 
 use std::collections::HashSet;
 use std::io::Write;
 use std::sync::mpsc;
 
 use clap::{Parser, Subcommand};
+use rustyline::error::ReadlineError;
+use rustyline::Editor;
 
 /// ccx — Claude Code in Rust
 #[derive(Parser)]
@@ -522,81 +525,100 @@ async fn run_inline_mode(
     ccx_tui::inline::render_footer_line(model);
     println!();
 
+    // Set up rustyline with tab completion and hints.
+    let config = rustyline::Config::builder()
+        .completion_type(rustyline::CompletionType::List)
+        .build();
+    let mut rl = Editor::with_config(config)?;
+    rl.set_helper(Some(completer::CcxCompleter));
+
+    // Load persistent history.
+    let history_path = dirs::home_dir()
+        .unwrap_or_default()
+        .join(".ccx_history");
+    let _ = rl.load_history(&history_path);
+
     loop {
-        ccx_tui::inline::render_prompt();
+        match rl.readline("❯ ") {
+            Ok(line) => {
+                let input = line.trim();
+                if input.is_empty() {
+                    continue;
+                }
+                let _ = rl.add_history_entry(input);
 
-        let mut input = String::new();
-        if std::io::stdin().read_line(&mut input).is_err() || input.is_empty() {
-            break;
-        }
-        let input = input.trim();
-        if input.is_empty() {
-            continue;
-        }
+                // Slash command handling.
+                if input.starts_with('/') {
+                    match input {
+                        "/exit" | "/quit" => break,
+                        "/help" => {
+                            commands::print_command_list();
+                            continue;
+                        }
+                        "/clear" => {
+                            print!("\x1b[2J\x1b[H");
+                            std::io::stdout().flush()?;
+                            continue;
+                        }
+                        "/cost" => {
+                            println!("{}", agent.cost().summary());
+                            continue;
+                        }
+                        "/model" => {
+                            println!("Model: {model}");
+                            continue;
+                        }
+                        "/compact" => {
+                            println!("\x1b[90mContext compaction not yet implemented.\x1b[0m");
+                            continue;
+                        }
+                        "/init" => {
+                            println!("\x1b[90mCLAUDE.md creation not yet implemented.\x1b[0m");
+                            continue;
+                        }
+                        "/version" => {
+                            println!("ccx v{}", env!("CARGO_PKG_VERSION"));
+                            continue;
+                        }
+                        "/tools" => {
+                            let names = tool_names.join(", ");
+                            println!("Available tools ({tool_count}): {names}");
+                            continue;
+                        }
+                        "/" => {
+                            commands::print_command_list();
+                            continue;
+                        }
+                        other => {
+                            commands::print_suggestions(other);
+                            continue;
+                        }
+                    }
+                }
 
-        // Slash command handling.
-        if input.starts_with('/') {
-            match input {
-                "/exit" | "/quit" => break,
-                "/help" => {
-                    commands::print_command_list();
-                    continue;
+                ccx_tui::inline::render_user_message(input);
+
+                let mut cb = InlineCallback::new();
+                match agent.send_message(input, &mut cb).await {
+                    Ok(_) => cb.finish_text(),
+                    Err(e) => {
+                        cb.finish_text();
+                        ccx_tui::inline::render_error(&format!("Error: {e}"));
+                    }
                 }
-                "/clear" => {
-                    print!("\x1b[2J\x1b[H");
-                    std::io::stdout().flush()?;
-                    continue;
-                }
-                "/cost" => {
-                    println!("{}", agent.cost().summary());
-                    continue;
-                }
-                "/model" => {
-                    println!("Model: {model}");
-                    continue;
-                }
-                "/compact" => {
-                    println!("\x1b[90mContext compaction not yet implemented.\x1b[0m");
-                    continue;
-                }
-                "/init" => {
-                    println!("\x1b[90mCLAUDE.md creation not yet implemented.\x1b[0m");
-                    continue;
-                }
-                "/version" => {
-                    println!("ccx v{}", env!("CARGO_PKG_VERSION"));
-                    continue;
-                }
-                "/tools" => {
-                    let names = tool_names.join(", ");
-                    println!("Available tools ({tool_count}): {names}");
-                    continue;
-                }
-                "/" => {
-                    commands::print_command_list();
-                    continue;
-                }
-                other => {
-                    // Partial match / autocomplete suggestions.
-                    commands::print_suggestions(other);
-                    continue;
-                }
+
+                ccx_tui::inline::render_separator();
+            }
+            Err(ReadlineError::Interrupted | ReadlineError::Eof) => break,
+            Err(err) => {
+                eprintln!("Input error: {err:?}");
+                break;
             }
         }
-
-        ccx_tui::inline::render_user_message(input);
-
-        let mut cb = InlineCallback::new();
-        match agent.send_message(input, &mut cb).await {
-            Ok(_) => cb.finish_text(),
-            Err(e) => {
-                cb.finish_text();
-                ccx_tui::inline::render_error(&format!("Error: {e}"));
-            }
-        }
-
-        ccx_tui::inline::render_separator();
     }
+
+    // Save history for next session.
+    let _ = rl.save_history(&history_path);
 
     ccx_tui::inline::render_footer(model);
     println!("\nGoodbye!");
