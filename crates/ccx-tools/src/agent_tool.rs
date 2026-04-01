@@ -69,7 +69,7 @@ impl Tool for AgentTool {
 
         let sub_ctx = ccx_core::ToolContext::new(ctx.working_dir.clone());
         let mut agent = ccx_core::AgentLoop::new(client, registry, sub_ctx, system);
-        agent.set_max_turns(20);
+        agent.set_max_turns(100);
 
         let mut cb = ccx_core::NoopCallback;
         match agent.send_message(prompt, &mut cb).await {

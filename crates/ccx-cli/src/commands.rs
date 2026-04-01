@@ -44,6 +44,10 @@ pub const COMMANDS: &[SlashCommand] = &[
         name: "/tools",
         description: "List available tools",
     },
+    SlashCommand {
+        name: "/login",
+        description: "Authenticate with Claude (opens browser)",
+    },
 ];
 
 /// Find commands matching a prefix (e.g., "/he" matches "/help").

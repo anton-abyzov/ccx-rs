@@ -1,0 +1,6 @@
+TO: team-lead
+FROM: research-agent
+TYPE: message
+SUMMARY: Tools research complete
+
+RESEARCH_COMPLETE: Tools analysis done. Key findings: The Rust ccx-rs tools have excellent parity for simple tools (Bash, Write, Edit, Glob, Grep are production-ready), but significant gaps exist in FileRead (no image/PDF/notebook handling — TS returns base64 for vision workflows), WebFetch (TS requires a `prompt` parameter for LLM-based content extraction vs Rust's plain HTML stripping), and Agent tool (missing 7 critical params: subagent_type, model, run_in_background, name, team_name, mode, isolation — making async/team/permission agent flows non-functional). Additionally, 10 TS tools have no Rust equivalent yet (TaskOutput, TaskStop, ExitPlanMode, MCP tools, AskUserQuestion, Config, Worktree tools). Full report at research-tools.md

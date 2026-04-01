@@ -38,7 +38,7 @@ enum Commands {
         permission_mode: String,
 
         /// Maximum turns per conversation exchange
-        #[arg(long, default_value = "50")]
+        #[arg(long, default_value = "200")]
         max_turns: usize,
 
         /// Use full-screen TUI instead of inline rendering
@@ -596,6 +596,13 @@ async fn run_inline_mode(
                         }
                         "/version" => {
                             println!("ccx v{}", env!("CARGO_PKG_VERSION"));
+                            true
+                        }
+                        "/login" => {
+                            match tokio::runtime::Handle::current().block_on(ccx_auth::oauth::login()) {
+                                Ok(_) => println!("Login successful! Restart ccx to use your subscription."),
+                                Err(e) => println!("\x1b[31mLogin failed: {e}\x1b[0m"),
+                            }
                             true
                         }
                         "/tools" => {

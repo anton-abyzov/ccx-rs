@@ -1,3 +1,5 @@
+pub mod oauth;
+
 use std::path::PathBuf;
 
 /// Errors during API key resolution.

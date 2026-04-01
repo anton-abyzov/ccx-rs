@@ -1,0 +1,7 @@
+[
+  {
+    "name": "research-ccx-parity-1",
+    "description": "Research: compare ccx-rs Rust implementation against original Claude Code TypeScript source for feature parity and correctness",
+    "created_at": 1775061576
+  }
+]
