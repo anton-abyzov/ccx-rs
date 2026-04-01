@@ -1,27 +1,42 @@
 # ccx-rs
 
+[![Release](https://img.shields.io/github/v/release/anton-abyzov/ccx-rs?style=flat-square)](https://github.com/anton-abyzov/ccx-rs/releases)
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue?style=flat-square)](LICENSE)
+[![Tests](https://img.shields.io/badge/tests-280%20passing-brightgreen?style=flat-square)]()
+
 **Free, open-source AI coding assistant.** 4.7MB binary. 19 tools. Works with Claude, DeepSeek, Nemotron — or any model via OpenRouter. No subscription required.
 
 ![CCX-RS Terminal UI](assets/screenshot.png)
 
 ## Install
 
-### Binary (fastest)
+### One-liner (recommended)
+
 ```bash
-curl -fsSL https://github.com/anton-abyzov/ccx-rs/releases/latest/download/ccx-macos-arm64 -o ccx && chmod +x ccx
+curl -fsSL https://raw.githubusercontent.com/anton-abyzov/ccx-rs/main/install.sh | sh
 ```
 
-### From source
+<details>
+<summary>Other install methods</summary>
+
+#### Cargo (from source)
 ```bash
-git clone https://github.com/anton-abyzov/ccx-rs.git && cd ccx-rs
-cargo build --release
-# Binary at ./target/release/ccx
+cargo install --git https://github.com/anton-abyzov/ccx-rs ccx-cli
 ```
 
-### Cargo
+> **Don't have Rust?** Install it first: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
+
+#### Manual download
+Download from [GitHub Releases](https://github.com/anton-abyzov/ccx-rs/releases) and add to your PATH.
+
+#### Build from source
 ```bash
-cargo install --git https://github.com/anton-abyzov/ccx-rs
+git clone https://github.com/anton-abyzov/ccx-rs.git
+cd ccx-rs && cargo build --release
+sudo cp target/release/ccx /usr/local/bin/
 ```
+
+</details>
 
 ## Run
 
@@ -45,7 +60,7 @@ ccx chat   # reads token from macOS Keychain — no API key needed
 ## Features
 
 - **19 tools** — Bash, FileRead/Write/Edit, Glob, Grep, WebFetch, Agent (spawns sub-agents), TeamCreate, SendMessage, TaskCreate, and more
-- **Claude Code-style TUI** — welcome panel, styled `❯` prompt, inline tool display
+- **Claude Code-style TUI** — welcome panel, styled `>` prompt, inline tool display
 - **Multi-model** — Claude (API/subscription), OpenRouter (200+ models), Ollama (local)
 - **Tab autocomplete** — slash commands + 50+ discovered skills
 - **MCP support** — connect external tool servers via `.mcp.json`
@@ -60,16 +75,16 @@ ccx chat   # reads token from macOS Keychain — no API key needed
 ```
 $ ccx chat --provider openrouter --model "nvidia/nemotron-3-super-120b-a12b:free"
 
-❯ Create a Python script that downloads the top 10 HN stories
+> Create a Python script that downloads the top 10 HN stories
 
-● Bash(pip install requests)
-  └ done
-● Write(hn_top10.py)
-  └ Created hn_top10.py (32 lines)
-● Bash(python hn_top10.py)
-  └ 1. Show HN: CCX - Open source AI coding assistant
-  └ 2. Ask HN: Best free AI models for coding?
-  └ ...
+* Bash(pip install requests)
+  done
+* Write(hn_top10.py)
+  Created hn_top10.py (32 lines)
+* Bash(python hn_top10.py)
+  1. Show HN: CCX - Open source AI coding assistant
+  2. Ask HN: Best free AI models for coding?
+  ...
 ```
 
 ## Slash Commands
