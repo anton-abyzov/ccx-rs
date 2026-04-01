@@ -1,0 +1,22 @@
+[
+  {
+    "content": "Add logging dependencies to workspace",
+    "status": "completed"
+  },
+  {
+    "content": "Add --log-level CLI argument",
+    "status": "completed"
+  },
+  {
+    "content": "Initialize logging in main.rs",
+    "status": "completed"
+  },
+  {
+    "content": "Add logging statements to agent loop",
+    "status": "completed"
+  },
+  {
+    "content": "Update ccx-core dependencies",
+    "status": "completed"
+  }
+]

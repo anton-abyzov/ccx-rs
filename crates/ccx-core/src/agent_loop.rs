@@ -2,6 +2,7 @@ use ccx_api::{
     ApiClient, ContentBlock, Delta, InputMessage, MessageContent, MessageRequest, Role,
     StopReason, StreamEvent, ThinkingConfig,
 };
+use log::{debug, error, info, trace, warn};
 use futures::StreamExt;
 
 use crate::context::ToolContext;
@@ -222,6 +223,7 @@ impl AgentLoop {
         user_text: &str,
         callback: &mut dyn AgentCallback,
     ) -> Result<String, AgentLoopError> {
+        info!("Starting agent loop for user message (len: {})", user_text.len());
         self.messages.push(InputMessage {
             role: Role::User,
             content: MessageContent::Text(user_text.to_string()),
@@ -230,9 +232,12 @@ impl AgentLoop {
         let mut turn = 0;
         loop {
             if turn >= self.max_turns {
+                error!("Agent loop exceeded maximum turns ({})", self.max_turns);
                 return Err(AgentLoopError::MaxTurnsExceeded(self.max_turns));
             }
             turn += 1;
+
+            debug!("Agent loop turn {}/{}", turn, self.max_turns);
 
             // Auto-compact if conversation is approaching context limits.
             self.maybe_compact();
@@ -256,6 +261,7 @@ impl AgentLoop {
 
             // Record usage for this turn.
             if let Some(usage) = &usage {
+                debug!("Token usage: {} in, {} out", usage.input_tokens, usage.output_tokens);
                 self.cost.record(usage);
             }
 
@@ -299,11 +305,13 @@ impl AgentLoop {
 
             // Execute tool calls in parallel if the model requested them.
             if stop_reason == Some(StopReason::ToolUse) && !tool_calls.is_empty() {
+                debug!("Executing {} tool calls", tool_calls.len());
                 // Phase 1: Check permissions sequentially (may prompt user).
                 let mut approved = Vec::new();
                 let mut results = Vec::new();
                 for (id, name, input) in tool_calls {
                     if !callback.should_allow_tool(&name, &input) {
+                        debug!("Tool permission denied: {}", name);
                         results.push(ContentBlock::ToolResult {
                             tool_use_id: id,
                             content: "Tool execution denied by user".to_string(),
@@ -311,6 +319,7 @@ impl AgentLoop {
                         });
                         continue;
                     }
+                    debug!("Tool permission granted: {}", name);
                     callback.on_tool_start(&name, &input);
                     approved.push((id, name, input));
                 }
@@ -328,6 +337,11 @@ impl AgentLoop {
                         Ok(r) => (r.content, r.is_error),
                         Err(e) => (e.to_string(), true),
                     };
+                    if is_error {
+                        warn!("Tool {} failed: {}", name, tool_content);
+                    } else {
+                        debug!("Tool {} succeeded", name);
+                    }
                     results.push(ContentBlock::ToolResult {
                         tool_use_id: id,
                         content: tool_content,
@@ -369,6 +383,7 @@ impl AgentLoop {
                 })
                 .unwrap_or_default();
 
+            info!("Agent loop completed after {} turns", turn);
             return Ok(final_text);
         }
     }
@@ -386,16 +401,22 @@ impl AgentLoop {
         ),
         AgentLoopError,
     > {
+        debug!("Starting stream_with_retry (max_retries: {})", self.retry_config.max_retries);
         let mut attempt = 0;
 
         loop {
             match self.client.stream_message(req.clone()).await {
                 Ok(stream) => {
+                    debug!("Successfully connected to API stream");
                     return self.consume_stream(stream, callback).await;
                 }
                 Err(ccx_api::Error::RateLimit { retry_after_secs }) => {
                     attempt += 1;
+                    warn!("Rate limited (attempt {}/{}): retry after {}s", 
+                          attempt, self.retry_config.max_retries, 
+                          retry_after_secs.map(|s| s.to_string()).unwrap_or_else(|| "unknown".to_string()));
                     if attempt > self.retry_config.max_retries {
+                        error!("Rate limit exhausted after {} attempts", attempt);
                         return Err(AgentLoopError::RateLimitExhausted(attempt));
                     }
 
@@ -413,6 +434,7 @@ impl AgentLoop {
                         delay_ms,
                         "rate limited",
                     );
+                    debug!("Sleeping for {}ms before retry", delay_ms);
                     tokio::time::sleep(
                         std::time::Duration::from_millis(delay_ms),
                     )
@@ -420,7 +442,10 @@ impl AgentLoop {
                 }
                 Err(ccx_api::Error::Overloaded) => {
                     attempt += 1;
+                    warn!("API overloaded (attempt {}/{}): backing off", 
+                          attempt, self.retry_config.max_retries);
                     if attempt > self.retry_config.max_retries {
+                        error!("API overloaded after max retries");
                         return Err(AgentLoopError::Api(
                             "API overloaded after max retries".into(),
                         ));
@@ -432,12 +457,14 @@ impl AgentLoop {
                         delay_ms.min(self.retry_config.max_delay_ms);
 
                     callback.on_retry(attempt, delay_ms, "overloaded");
+                    debug!("Sleeping for {}ms before retry", delay_ms);
                     tokio::time::sleep(
                         std::time::Duration::from_millis(delay_ms),
                     )
                     .await;
                 }
                 Err(e) => {
+                    error!("API error: {}", e);
                     return Err(AgentLoopError::Api(e.to_string()));
                 }
             }
@@ -463,9 +490,13 @@ impl AgentLoop {
         ),
         AgentLoopError,
     > {
+        debug!("Starting to consume API stream");
         let mut blocks: Vec<PendingBlock> = Vec::new();
         let mut stop_reason = None;
         let mut usage = None;
+        let mut text_chunks = 0;
+        let mut tool_calls_started = 0;
+        let mut thinking_chunks = 0;
 
         while let Some(event) = stream.next().await {
             let event =
@@ -477,6 +508,25 @@ impl AgentLoop {
                 } => {
                     while blocks.len() <= index {
                         blocks.push(PendingBlock::Other);
+                    }
+                    match &content_block {
+                        ContentBlock::ToolUse { name, .. } => {
+                            debug!("Tool use started: {} (index {})", name, index);
+                            tool_calls_started += 1;
+                        }
+                        ContentBlock::Thinking { thinking, .. } => {
+                            if !thinking.is_empty() {
+                                debug!("Thinking block started (index {}): {}...", index, &thinking[..50.min(thinking.len())]);
+                                thinking_chunks += 1;
+                            }
+                        }
+                        ContentBlock::Text { text } => {
+                            if !text.is_empty() {
+                                debug!("Text block started (index {}): {}...", index, &text[..50.min(text.len())]);
+                                text_chunks += 1;
+                            }
+                        }
+                        _ => {}
                     }
                     blocks[index] = match content_block {
                         ContentBlock::Text { text } => PendingBlock::Text(text),
@@ -500,26 +550,36 @@ impl AgentLoop {
                                 PendingBlock::Text(buf),
                                 Delta::TextDelta { text },
                             ) => {
-                                buf.push_str(&text);
-                                callback.on_text(&text);
+                                if !text.is_empty() {
+                                    trace!("Text delta: {}...", &text[..20.min(text.len())]);
+                                    buf.push_str(&text);
+                                    callback.on_text(&text);
+                                }
                             }
                             (
                                 PendingBlock::ToolUse { json_buf, .. },
                                 Delta::InputJsonDelta { partial_json },
                             ) => {
-                                json_buf.push_str(&partial_json);
+                                if !partial_json.is_empty() {
+                                    trace!("Tool input delta: {}...", &partial_json[..20.min(partial_json.len())]);
+                                    json_buf.push_str(&partial_json);
+                                }
                             }
                             (
                                 PendingBlock::Thinking { text: buf, .. },
                                 Delta::ThinkingDelta { thinking },
                             ) => {
-                                buf.push_str(&thinking);
-                                callback.on_thinking(&thinking);
+                                if !thinking.is_empty() {
+                                    trace!("Thinking delta: {}...", &thinking[..20.min(thinking.len())]);
+                                    buf.push_str(&thinking);
+                                    callback.on_thinking(&thinking);
+                                }
                             }
                             (
                                 PendingBlock::Thinking { signature: sig, .. },
                                 Delta::SignatureDelta { signature },
                             ) => {
+                                trace!("Signature delta received");
                                 *sig = Some(signature);
                             }
                             _ => {}
@@ -530,12 +590,15 @@ impl AgentLoop {
                     delta,
                     usage: msg_usage,
                 } => {
+                    debug!("Message delta: stop_reason={:?}", delta.stop_reason);
                     stop_reason = delta.stop_reason;
                     if let Some(u) = msg_usage {
+                        debug!("Usage: {} in, {} out", u.input_tokens, u.output_tokens);
                         usage = Some(u);
                     }
                 }
                 StreamEvent::Error { error } => {
+                    error!("Stream error: [{}] {}", error.error_type, error.message);
                     return Err(AgentLoopError::Api(format!(
                         "[{}] {}",
                         error.error_type, error.message
@@ -545,6 +608,8 @@ impl AgentLoop {
             }
         }
 
+        debug!("Stream consumed: {} text chunks, {} tool calls, {} thinking chunks", 
+               text_chunks, tool_calls_started, thinking_chunks);
         Ok((blocks, stop_reason, usage))
     }
 }

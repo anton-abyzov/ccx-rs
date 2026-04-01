@@ -103,6 +103,8 @@ async fn main() {
         .format_timestamp(None)
         .init();
 
+    log::info!("Starting ccx with log level: {}", cli.log_level);
+
     match cli.command {
         Commands::Chat {
             model,
@@ -1044,7 +1046,10 @@ async fn run_inline_mode(
                         };
 
                         ccx_tui::inline::clear_previous_line();
-                        ccx_tui::inline::render_user_message(input);
+                        ccx_tui::inline::render_skill_invocation(
+                            &skill.name,
+                            skill_args,
+                        );
 
                         let mut cb = InlineCallback::new(bypass_permissions, auth_source, show_thinking);
                         match agent.send_message(&user_msg, &mut cb).await {

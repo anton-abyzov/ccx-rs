@@ -6,6 +6,29 @@ use serde_json::json;
 
 pub struct GrepTool;
 
+/// Find ripgrep binary — check PATH first, then common install locations.
+fn which_rg() -> String {
+    if let Ok(output) = std::process::Command::new("which").arg("rg").output() {
+        if output.status.success() {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !path.is_empty() {
+                return path;
+            }
+        }
+    }
+    // Common fallback paths
+    for path in &[
+        "/opt/homebrew/bin/rg",
+        "/usr/local/bin/rg",
+        "/usr/bin/rg",
+    ] {
+        if std::path::Path::new(path).exists() {
+            return path.to_string();
+        }
+    }
+    "rg".to_string() // last resort
+}
+
 #[async_trait]
 impl Tool for GrepTool {
     fn name(&self) -> &str {
@@ -95,7 +118,9 @@ impl Tool for GrepTool {
         let head_limit = input["head_limit"].as_u64().unwrap_or(250) as usize;
         let offset = input["offset"].as_u64().unwrap_or(0) as usize;
 
-        let mut cmd = tokio::process::Command::new("rg");
+        // Try system rg first, fall back to common paths
+        let rg_path = which_rg();
+        let mut cmd = tokio::process::Command::new(&rg_path);
         cmd.arg("--no-heading").arg("--color=never");
 
         // Output mode flags.
@@ -148,6 +173,7 @@ impl Tool for GrepTool {
         }
 
         cmd.arg("--").arg(pattern).arg(&search_path);
+        cmd.current_dir(&ctx.working_dir);
 
         let output = tokio::time::timeout(Duration::from_secs(30), cmd.output())
             .await

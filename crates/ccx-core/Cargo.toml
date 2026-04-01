@@ -15,3 +15,5 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 async-trait = { workspace = true }
 glob = { workspace = true }
+log = { workspace = true }
+env_logger = { workspace = true }

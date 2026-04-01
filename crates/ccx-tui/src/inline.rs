@@ -462,6 +462,20 @@ fn render_inline_md(text: &str) -> String {
 }
 
 /// Print an error message.
+/// Render a skill invocation banner — prominent, distinct from regular messages.
+pub fn render_skill_invocation(skill_name: &str, args: Option<&str>) {
+    let width = term_width().min(80);
+    println!();
+    println!("{ACCENT}╭{}╮{RESET}", "─".repeat(width - 2));
+    if let Some(a) = args {
+        println!("{ACCENT}│{RESET} {ACCENT_BOLD}⚡ Skill: /{skill_name}{RESET} {DIM}{a}{RESET}");
+    } else {
+        println!("{ACCENT}│{RESET} {ACCENT_BOLD}⚡ Skill: /{skill_name}{RESET}");
+    }
+    println!("{ACCENT}╰{}╯{RESET}", "─".repeat(width - 2));
+    println!();
+}
+
 pub fn render_error(msg: &str) {
     println!("{RED}✗ {msg}{RESET}");
 }
