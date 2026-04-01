@@ -50,7 +50,7 @@ impl Tool for AgentTool {
         let model = std::env::var("CCX_MODEL")
             .unwrap_or_else(|_| "claude-sonnet-4-6".into());
 
-        let client = ccx_api::ClaudeClient::new(&api_key, &model);
+        let client = ccx_api::ApiClient::Claude(ccx_api::ClaudeClient::new(&api_key, &model));
 
         // Sub-agent gets a limited tool set: Bash, Read, Write, Glob, Grep.
         let mut registry = ccx_core::ToolRegistry::new();

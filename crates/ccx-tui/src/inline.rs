@@ -61,13 +61,16 @@ fn pad_to(s: &str, target: usize) -> String {
 }
 
 /// Render the welcome panel with two-column layout.
-pub fn render_welcome(model: &str, auth_source: &str, cwd: &str, tools: usize) {
+pub fn render_welcome(model: &str, auth_source: &str, cwd: &str, tools: usize, email: Option<&str>) {
     let width = term_width().min(80);
 
     // Narrow terminal fallback.
     if width < 50 {
         println!("{ACCENT_BOLD}CCX-RS v{}{RESET}", env!("CARGO_PKG_VERSION"));
         println!("{GREEN}{model}{RESET} · {DIM}{auth_source}{RESET}");
+        if let Some(email) = email {
+            println!("{DIM}{email}{RESET}");
+        }
         println!("{DIM}{cwd}{RESET}");
         println!();
         return;
@@ -102,7 +105,7 @@ pub fn render_welcome(model: &str, auth_source: &str, cwd: &str, tools: usize) {
     ];
 
     // Left panel content.
-    let left_lines: Vec<String> = vec![
+    let mut left_lines: Vec<String> = vec![
         String::new(),
         format!("  {BOLD}Welcome back!{RESET}"),
         String::new(),
@@ -112,10 +115,13 @@ pub fn render_welcome(model: &str, auth_source: &str, cwd: &str, tools: usize) {
         pet[3].to_string(),
         String::new(),
         format!("  {GREEN}{model}{RESET} · {DIM}{auth_source}{RESET}"),
-        format!("  {DIM}{cwd}{RESET}"),
-        format!("  {DIM}Tools: {tools}{RESET}"),
-        String::new(),
     ];
+    if let Some(email) = email {
+        left_lines.push(format!("  {DIM}{email}{RESET}"));
+    }
+    left_lines.push(format!("  {DIM}{cwd}{RESET}"));
+    left_lines.push(format!("  {DIM}Tools: {tools}{RESET}"));
+    left_lines.push(String::new());
 
     // Right panel content.
     let sep = "─".repeat(right_w.saturating_sub(2));

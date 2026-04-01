@@ -165,7 +165,7 @@ fn parse_sse_stream(
 }
 
 /// Convert a byte stream into a stream of lines.
-fn byte_stream_to_lines(
+pub(crate) fn byte_stream_to_lines(
     byte_stream: impl Stream<Item = Result<bytes::Bytes, reqwest::Error>> + Send + 'static,
 ) -> impl Stream<Item = Result<String, reqwest::Error>> + Send {
     let boxed: BoxStream<'static, Result<bytes::Bytes, reqwest::Error>> = byte_stream.boxed();

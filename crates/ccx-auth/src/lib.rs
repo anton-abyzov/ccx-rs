@@ -61,6 +61,34 @@ impl AuthMethod {
             },
         }
     }
+
+    /// Returns the OAuth access token if this is an OAuth auth method.
+    pub fn oauth_token(&self) -> Option<&str> {
+        match self {
+            AuthMethod::OAuthToken { access_token, .. } => Some(access_token),
+            _ => None,
+        }
+    }
+}
+
+/// Fetch the account email from the Anthropic OAuth profile endpoint.
+pub async fn fetch_oauth_email(access_token: &str) -> Option<String> {
+    let client = reqwest::Client::new();
+    let resp = client
+        .get("https://api.anthropic.com/api/oauth/profile")
+        .header("Authorization", format!("Bearer {access_token}"))
+        .send()
+        .await
+        .ok()?;
+
+    if !resp.status().is_success() {
+        return None;
+    }
+
+    let body: serde_json::Value = resp.json().await.ok()?;
+    body.get("email")
+        .and_then(|e| e.as_str())
+        .map(|s| s.to_string())
 }
 
 /// Resolve authentication from all available sources, in priority order:

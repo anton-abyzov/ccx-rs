@@ -9,6 +9,7 @@ use crate::style::Theme;
 pub struct WelcomeInfo {
     pub model: String,
     pub auth_source: String,
+    pub email: Option<String>,
     pub cwd: String,
     pub tool_count: usize,
 }
@@ -18,6 +19,7 @@ impl Default for WelcomeInfo {
         Self {
             model: "claude-sonnet-4-6".into(),
             auth_source: "API Key".into(),
+            email: None,
             cwd: "~/".into(),
             tool_count: 11,
         }
@@ -68,6 +70,13 @@ fn render_left_panel(frame: &mut Frame, area: Rect, info: &WelcomeInfo) {
             Span::styled(&info.model, Theme::model_info()),
             Span::styled(" · ", Theme::welcome_info()),
             Span::styled(&info.auth_source, Theme::welcome_info()),
+        ]),
+        Line::from(vec![
+            Span::styled("  ", Theme::welcome_info()),
+            Span::styled(
+                info.email.as_deref().unwrap_or(""),
+                Theme::welcome_info(),
+            ),
         ]),
         Line::from(vec![
             Span::styled("  ", Theme::welcome_info()),

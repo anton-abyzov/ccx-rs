@@ -48,6 +48,14 @@ enum Commands {
         /// Skip all permission prompts (bypass mode)
         #[arg(long)]
         dangerously_skip_permissions: bool,
+
+        /// Provider: anthropic (default), openrouter
+        #[arg(long, default_value = "anthropic")]
+        provider: String,
+
+        /// OpenRouter API key (overrides OPENROUTER_API_KEY env var)
+        #[arg(long)]
+        openrouter_key: Option<String>,
     },
     /// Show version and crate information
     Info,
@@ -66,6 +74,8 @@ async fn main() {
             max_turns,
             tui,
             dangerously_skip_permissions,
+            provider,
+            openrouter_key,
         } => {
             if let Err(e) = run_chat(
                 &model,
@@ -75,6 +85,8 @@ async fn main() {
                 max_turns,
                 tui,
                 dangerously_skip_permissions,
+                &provider,
+                openrouter_key.as_deref(),
             )
             .await
             {
@@ -114,10 +126,35 @@ async fn run_chat(
     max_turns: usize,
     use_tui: bool,
     dangerously_skip_permissions: bool,
+    provider: &str,
+    openrouter_key: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Resolve authentication (API key or OAuth token from Claude Code).
-    let auth = ccx_auth::resolve_auth(explicit_key)?;
-    let client = ccx_api::ClaudeClient::with_auth(&auth, model);
+    // Resolve client based on provider.
+    let or_key_env = std::env::var("OPENROUTER_API_KEY").ok();
+
+    let (client, auth_source, email): (ccx_api::ApiClient, String, Option<String>) =
+        match provider {
+            "openrouter" => {
+                let key = openrouter_key
+                    .or(or_key_env.as_deref())
+                    .ok_or("OpenRouter API key required: set OPENROUTER_API_KEY or use --openrouter-key")?;
+                let client =
+                    ccx_api::ApiClient::OpenAi(ccx_api::OpenAiClient::openrouter(key, model));
+                (client, "OpenRouter".to_string(), None)
+            }
+            _ => {
+                let auth = ccx_auth::resolve_auth(explicit_key)?;
+                let email = if let Some(token) = auth.oauth_token() {
+                    ccx_auth::fetch_oauth_email(token).await
+                } else {
+                    None
+                };
+                let client =
+                    ccx_api::ApiClient::Claude(ccx_api::ClaudeClient::with_auth(&auth, model));
+                let auth_source = auth.display_label().to_string();
+                (client, auth_source, email)
+            }
+        };
 
     // Load settings.
     let settings = ccx_config::load_default_settings().unwrap_or_default();
@@ -168,18 +205,20 @@ async fn run_chat(
 
     if let Some(text) = prompt {
         // Non-interactive single-shot mode.
-        eprintln!("Auth: {}", auth.display_label());
+        eprintln!("Auth: {auth_source}");
+        if let Some(ref email) = email {
+            eprintln!("Account: {email}");
+        }
         eprintln!("Model: {model} | Mode: {mode:?} | Tools: {tool_count}");
         run_single_shot(&mut agent, text).await?;
     } else {
         // Interactive mode (inline default, full-screen TUI with --tui).
-        let auth_source = auth.display_label().to_string();
         let cwd_display = shorten_home(&cwd);
 
         if use_tui {
-            run_tui_mode(&mut agent, model, &auth_source, &cwd_display, tool_count).await?;
+            run_tui_mode(&mut agent, model, &auth_source, &cwd_display, tool_count, email.as_deref()).await?;
         } else {
-            run_inline_mode(&mut agent, model, &auth_source, &cwd_display, &tool_names, bypass_permissions).await?;
+            run_inline_mode(&mut agent, model, &auth_source, &cwd_display, &tool_names, bypass_permissions, email.as_deref()).await?;
         }
     }
 
@@ -222,6 +261,7 @@ async fn run_tui_mode(
     auth_source: &str,
     cwd_display: &str,
     tool_count: usize,
+    email: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (tui_tx, tui_rx) = mpsc::channel::<ccx_tui::TuiEvent>();
     let (input_tx, input_rx) = mpsc::channel::<ccx_tui::TuiInput>();
@@ -229,6 +269,7 @@ async fn run_tui_mode(
     let welcome = ccx_tui::WelcomeInfo {
         model: model.to_string(),
         auth_source: auth_source.to_string(),
+        email: email.map(|s| s.to_string()),
         cwd: cwd_display.to_string(),
         tool_count,
     };
@@ -420,15 +461,19 @@ struct InlineCallback {
     spinner_shown: bool,
     always_allow: HashSet<String>,
     bypass_permissions: bool,
+    auth_source: String,
+    retry_count: u32,
 }
 
 impl InlineCallback {
-    fn new(bypass_permissions: bool) -> Self {
+    fn new(bypass_permissions: bool, auth_source: &str) -> Self {
         Self {
             text_buffer: String::new(),
             spinner_shown: false,
             always_allow: HashSet::new(),
             bypass_permissions,
+            auth_source: auth_source.to_string(),
+            retry_count: 0,
         }
     }
 
@@ -483,12 +528,23 @@ impl ccx_core::AgentCallback for InlineCallback {
 
     fn on_thinking(&mut self, _text: &str) {}
 
-    fn on_retry(&mut self, attempt: u32, delay_ms: u64, reason: &str) {
+    fn on_retry(&mut self, _attempt: u32, delay_ms: u64, _reason: &str) {
         self.finish_text();
+        self.retry_count += 1;
+        let label = if self.auth_source.starts_with("Claude") {
+            format!("{} daily limit", self.auth_source)
+        } else {
+            "rate limited".to_string()
+        };
         ccx_tui::inline::render_error(&format!(
-            "retry {attempt}: {reason}, waiting {:.1}s",
+            "Rate limited ({label}). Retrying in {:.1}s...",
             delay_ms as f64 / 1000.0
         ));
+        if self.retry_count >= 3 {
+            ccx_tui::inline::render_error(
+                "Try: --provider openrouter --model deepseek/deepseek-r1-0528:free",
+            );
+        }
     }
 
     fn on_turn_complete(&mut self, _turn: usize, _cost: &ccx_core::CostTracker) {
@@ -519,9 +575,10 @@ async fn run_inline_mode(
     cwd_display: &str,
     tool_names: &[String],
     bypass_permissions: bool,
+    email: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let tool_count = tool_names.len();
-    ccx_tui::inline::render_welcome(model, auth_source, cwd_display, tool_count);
+    ccx_tui::inline::render_welcome(model, auth_source, cwd_display, tool_count, email);
     ccx_tui::inline::render_footer_line(model);
     println!();
 
@@ -645,7 +702,7 @@ async fn run_inline_mode(
                         ccx_tui::inline::clear_previous_line();
                         ccx_tui::inline::render_user_message(input);
 
-                        let mut cb = InlineCallback::new(bypass_permissions);
+                        let mut cb = InlineCallback::new(bypass_permissions, auth_source);
                         match agent.send_message(&user_msg, &mut cb).await {
                             Ok(_) => cb.finish_text(),
                             Err(e) => {
@@ -666,7 +723,7 @@ async fn run_inline_mode(
                 ccx_tui::inline::clear_previous_line();
                 ccx_tui::inline::render_user_message(input);
 
-                let mut cb = InlineCallback::new(bypass_permissions);
+                let mut cb = InlineCallback::new(bypass_permissions, auth_source);
                 match agent.send_message(input, &mut cb).await {
                     Ok(_) => cb.finish_text(),
                     Err(e) => {

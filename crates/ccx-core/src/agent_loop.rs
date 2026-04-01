@@ -1,5 +1,5 @@
 use ccx_api::{
-    ClaudeClient, ContentBlock, Delta, InputMessage, MessageContent, MessageRequest, Role,
+    ApiClient, ContentBlock, Delta, InputMessage, MessageContent, MessageRequest, Role,
     StopReason, StreamEvent,
 };
 use futures::StreamExt;
@@ -43,7 +43,7 @@ impl Default for RetryConfig {
 
 /// The main agent loop: message -> API -> tool_use -> execute -> loop.
 pub struct AgentLoop {
-    client: ClaudeClient,
+    client: ApiClient,
     registry: ToolRegistry,
     context: ToolContext,
     system_prompt: String,
@@ -83,7 +83,7 @@ pub enum AgentLoopError {
 
 impl AgentLoop {
     pub fn new(
-        client: ClaudeClient,
+        client: ApiClient,
         registry: ToolRegistry,
         context: ToolContext,
         system_prompt: String,
@@ -432,10 +432,11 @@ impl AgentLoop {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ccx_api::ClaudeClient;
 
     #[test]
     fn test_agent_loop_creation() {
-        let client = ClaudeClient::new("test-key", "test-model");
+        let client = ApiClient::Claude(ClaudeClient::new("test-key", "test-model"));
         let registry = ToolRegistry::new();
         let ctx = ToolContext::new(std::path::PathBuf::from("/tmp"));
         let agent = AgentLoop::new(client, registry, ctx, "system".into());
@@ -464,7 +465,7 @@ mod tests {
 
     #[test]
     fn test_agent_loop_set_max_turns() {
-        let client = ClaudeClient::new("key", "model");
+        let client = ApiClient::Claude(ClaudeClient::new("key", "model"));
         let registry = ToolRegistry::new();
         let ctx = ToolContext::new(std::path::PathBuf::from("/tmp"));
         let mut agent = AgentLoop::new(client, registry, ctx, "sys".into());
@@ -474,7 +475,7 @@ mod tests {
 
     #[test]
     fn test_retry_config_custom() {
-        let client = ClaudeClient::new("key", "model");
+        let client = ApiClient::Claude(ClaudeClient::new("key", "model"));
         let registry = ToolRegistry::new();
         let ctx = ToolContext::new(std::path::PathBuf::from("/tmp"));
         let mut agent = AgentLoop::new(client, registry, ctx, "sys".into());
