@@ -122,6 +122,11 @@ impl AgentLoop {
         &self.messages
     }
 
+    /// Replace conversation messages (for session resume).
+    pub fn set_messages(&mut self, messages: Vec<InputMessage>) {
+        self.messages = messages;
+    }
+
     pub fn cost(&self) -> &CostTracker {
         &self.cost
     }

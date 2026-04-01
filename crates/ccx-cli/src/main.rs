@@ -78,6 +78,14 @@ enum Commands {
         /// OpenRouter API key (overrides OPENROUTER_API_KEY env var)
         #[arg(long)]
         openrouter_key: Option<String>,
+
+        /// Resume a session (optionally by ID; no ID = list sessions)
+        #[arg(long, num_args = 0..=1, default_missing_value = "")]
+        resume: Option<String>,
+
+        /// Continue the most recent session for this directory
+        #[arg(long = "continue")]
+        continue_session: bool,
     },
     /// Show version and crate information
     Info,
@@ -120,6 +128,8 @@ async fn main() {
             sandbox,
             provider,
             openrouter_key,
+            resume,
+            continue_session,
         } => {
             if let Err(e) = run_chat(
                 &model,
@@ -135,6 +145,8 @@ async fn main() {
                 sandbox,
                 &provider,
                 openrouter_key.as_deref(),
+                resume.as_deref(),
+                continue_session,
             )
             .await
             {
@@ -180,6 +192,8 @@ async fn run_chat(
     sandbox: bool,
     provider: &str,
     openrouter_key: Option<&str>,
+    resume_id: Option<&str>,
+    continue_session: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Resolve client based on provider.
     let or_key_env = std::env::var("OPENROUTER_API_KEY").ok();
@@ -315,7 +329,7 @@ async fn run_chat(
         if use_tui {
             run_tui_mode(&mut agent, model, &auth_source, &cwd_display, tool_count, email.as_deref()).await?;
         } else {
-            run_inline_mode(&mut agent, model, &auth_source, &cwd_display, &tool_names, bypass_permissions, email.as_deref(), show_thinking).await?;
+            run_inline_mode(&mut agent, model, &auth_source, &cwd_display, &tool_names, bypass_permissions, email.as_deref(), show_thinking, resume_id, continue_session).await?;
         }
     }
 
@@ -698,6 +712,8 @@ async fn run_inline_mode(
     bypass_permissions: bool,
     email: Option<&str>,
     show_thinking: bool,
+    resume_id: Option<&str>,
+    continue_session: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let tool_count = tool_names.len();
     ccx_tui::inline::render_welcome(model, auth_source, cwd_display, tool_count, email);
@@ -737,9 +753,72 @@ async fn run_inline_mode(
     // Session tracking.
     let cwd = std::env::current_dir().unwrap_or_default();
     let cwd_str = cwd.to_string_lossy().to_string();
-    let session_id = sessions::new_session_id();
+    let mut session_id = sessions::new_session_id();
+    let session_created = sessions::now_epoch();
     let mut session_turns: usize = 0;
     let mut first_preview = String::new();
+
+    // Handle --continue flag.
+    if continue_session {
+        match sessions::find_latest_for_cwd(&cwd_str) {
+            Some(meta) => {
+                match sessions::load_session_messages(&cwd_str, &meta.id) {
+                    Ok(messages) if !messages.is_empty() => {
+                        let count = messages.len();
+                        agent.set_messages(messages);
+                        session_id = meta.id.clone();
+                        session_turns = meta.turns;
+                        first_preview = meta.preview.clone();
+                        let short_id = &session_id[..session_id.len().min(8)];
+                        println!(
+                            "\x1b[32m\u{21bb} Resuming session {short_id} ({} turns, {count} messages)\x1b[0m",
+                            session_turns
+                        );
+                    }
+                    Ok(_) => println!("\x1b[33mLatest session has no messages.\x1b[0m"),
+                    Err(e) => println!("\x1b[31mFailed to load session: {e}\x1b[0m"),
+                }
+            }
+            None => println!("\x1b[90mNo previous session found for this directory.\x1b[0m"),
+        }
+    } else if let Some(id) = resume_id {
+        if id.is_empty() {
+            // --resume without ID: list sessions.
+            let all = sessions::list_sessions_for_project(&cwd_str);
+            if all.is_empty() {
+                println!("\x1b[90mNo saved sessions for this directory.\x1b[0m");
+            } else {
+                println!("\n\x1b[1mSessions for this directory:\x1b[0m\n");
+                for (i, s) in all.iter().take(10).enumerate() {
+                    let ts = sessions::format_epoch(s.last_active);
+                    println!(
+                        "  \x1b[33m{}\x1b[0m  {ts} ({} turns)  {}",
+                        i + 1, s.turns, s.preview
+                    );
+                    println!("    ID: {}", s.id);
+                }
+                println!("\n\x1b[90mUse: /resume <session-id>  or  ccx chat --resume <id>\x1b[0m\n");
+            }
+        } else {
+            // --resume <id>: load specific session.
+            match sessions::load_session_messages(&cwd_str, id) {
+                Ok(messages) if !messages.is_empty() => {
+                    let count = messages.len();
+                    let meta = sessions::find_session_meta(&cwd_str, id);
+                    session_turns = meta.as_ref().map(|m| m.turns).unwrap_or(0);
+                    first_preview = meta.as_ref().map(|m| m.preview.clone()).unwrap_or_default();
+                    agent.set_messages(messages);
+                    session_id = id.to_string();
+                    let short_id = &session_id[..session_id.len().min(8)];
+                    println!(
+                        "\x1b[32m\u{21bb} Resuming session {short_id} ({session_turns} turns, {count} messages)\x1b[0m",
+                    );
+                }
+                Ok(_) => println!("\x1b[33mSession {id} has no messages.\x1b[0m"),
+                Err(e) => println!("\x1b[31m{e}\x1b[0m"),
+            }
+        }
+    }
 
     // MCP server config for /doctor.
     let mcp_config = mcp_bridge::load_mcp_config(&cwd);
@@ -830,25 +909,32 @@ async fn run_inline_mode(
                         }
                         "/resume" => {
                             if let Some(sid) = cmd_args {
-                                match sessions::load_session(sid) {
-                                    Ok(session) => {
-                                        println!("\x1b[32mResumed session {}\x1b[0m", session.id);
-                                        println!("  Preview: {}", session.preview);
-                                        println!("  Turns: {} | Messages: {}", session.total_turns, session.messages.len());
-                                        // Note: we can't inject messages into the agent loop directly,
-                                        // but we inform the model about the resumed context.
+                                match sessions::load_session_messages(&cwd_str, sid) {
+                                    Ok(messages) if !messages.is_empty() => {
+                                        let count = messages.len();
+                                        let meta = sessions::find_session_meta(&cwd_str, sid);
+                                        let turns = meta.as_ref().map(|m| m.turns).unwrap_or(0);
+                                        first_preview = meta.as_ref().map(|m| m.preview.clone()).unwrap_or_default();
+                                        agent.set_messages(messages);
+                                        session_id = sid.to_string();
+                                        session_turns = turns;
+                                        let short_id = &session_id[..session_id.len().min(8)];
+                                        println!(
+                                            "\x1b[32m\u{21bb} Resumed session {short_id} ({turns} turns, {count} messages)\x1b[0m"
+                                        );
                                     }
+                                    Ok(_) => println!("\x1b[33mSession {sid} has no messages.\x1b[0m"),
                                     Err(e) => println!("\x1b[31m{e}\x1b[0m"),
                                 }
                             } else {
-                                let all = sessions::list_sessions();
+                                let all = sessions::list_sessions_for_project(&cwd_str);
                                 if all.is_empty() {
                                     println!("\x1b[90mNo saved sessions.\x1b[0m");
                                 } else {
                                     println!("\n\x1b[1mRecent sessions:\x1b[0m\n");
                                     for (i, s) in all.iter().take(10).enumerate() {
-                                        let ts = chrono_format(s.updated_at);
-                                        println!("  \x1b[33m{}\x1b[0m  \x1b[90m{}\x1b[0m  {}", s.id, ts, s.preview);
+                                        let ts = sessions::format_epoch(s.last_active);
+                                        println!("  \x1b[33m{}\x1b[0m  \x1b[90m{ts}\x1b[0m  ({} turns)  {}", s.id, s.turns, s.preview);
                                         if i >= 9 { break; }
                                     }
                                     println!("\n\x1b[90mUsage: /resume <session-id>\x1b[0m\n");
@@ -858,10 +944,23 @@ async fn run_inline_mode(
                         }
                         "/continue" => {
                             match sessions::find_latest_for_cwd(&cwd_str) {
-                                Some(session) => {
-                                    println!("\x1b[32mResuming latest session for this directory:\x1b[0m {}", session.id);
-                                    println!("  Preview: {}", session.preview);
-                                    println!("  Turns: {} | Updated: {}", session.total_turns, chrono_format(session.updated_at));
+                                Some(meta) => {
+                                    match sessions::load_session_messages(&cwd_str, &meta.id) {
+                                        Ok(messages) if !messages.is_empty() => {
+                                            let count = messages.len();
+                                            agent.set_messages(messages);
+                                            session_id = meta.id.clone();
+                                            session_turns = meta.turns;
+                                            first_preview = meta.preview.clone();
+                                            let short_id = &session_id[..session_id.len().min(8)];
+                                            println!(
+                                                "\x1b[32m\u{21bb} Resumed session {short_id} ({} turns, {count} messages)\x1b[0m",
+                                                session_turns
+                                            );
+                                        }
+                                        Ok(_) => println!("\x1b[33mLatest session has no messages.\x1b[0m"),
+                                        Err(e) => println!("\x1b[31mFailed to load session: {e}\x1b[0m"),
+                                    }
                                 }
                                 None => {
                                     println!("\x1b[90mNo previous session found for this directory.\x1b[0m");
@@ -928,17 +1027,16 @@ async fn run_inline_mode(
                             true
                         }
                         "/sessions" => {
-                            let all = sessions::list_sessions();
+                            let all = sessions::list_sessions_for_project(&cwd_str);
                             if all.is_empty() {
-                                println!("\x1b[90mNo saved sessions.\x1b[0m");
+                                println!("\x1b[90mNo saved sessions for this directory.\x1b[0m");
                             } else {
-                                println!("\n\x1b[1mRecent sessions ({}):\x1b[0m\n", all.len());
+                                println!("\n\x1b[1mSessions for this directory ({}):\x1b[0m\n", all.len());
                                 for s in all.iter().take(15) {
-                                    let ts = chrono_format(s.updated_at);
-                                    let dir = shorten_home_str(&s.cwd);
+                                    let ts = sessions::format_epoch(s.last_active);
                                     println!(
-                                        "  \x1b[33m{}\x1b[0m  \x1b[90m{}\x1b[0m  \x1b[36m{}\x1b[0m  {}",
-                                        s.id, ts, dir, s.preview
+                                        "  \x1b[33m{}\x1b[0m  \x1b[90m{ts}\x1b[0m  ({} turns)  {}",
+                                        s.id, s.turns, s.preview
                                     );
                                 }
                                 println!();
@@ -1088,6 +1186,21 @@ async fn run_inline_mode(
                 }
 
                 session_turns += 1;
+
+                // Incremental session save after each turn.
+                let _ = sessions::save_session_messages(&cwd_str, &session_id, agent.messages());
+                let _ = sessions::save_session_meta(&sessions::SessionMeta {
+                    id: session_id.clone(),
+                    cwd: cwd_str.clone(),
+                    model: model.to_string(),
+                    created: session_created,
+                    last_active: sessions::now_epoch(),
+                    preview: first_preview.clone(),
+                    name: None,
+                    turns: session_turns,
+                    total_tokens: agent.cost().total_input_tokens + agent.cost().total_output_tokens,
+                });
+
                 ccx_tui::inline::render_separator();
             }
             Err(ReadlineError::Interrupted | ReadlineError::Eof) => break,
@@ -1098,30 +1211,21 @@ async fn run_inline_mode(
         }
     }
 
-    // Save session if we had any turns.
+    // Final session save and cleanup.
     if session_turns > 0 {
-        let cost = agent.cost();
-        let session = sessions::Session {
+        let _ = sessions::save_session_messages(&cwd_str, &session_id, agent.messages());
+        let _ = sessions::save_session_meta(&sessions::SessionMeta {
             id: session_id.clone(),
-            cwd: cwd_str,
+            cwd: cwd_str.clone(),
             model: model.to_string(),
-            created_at: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0),
-            updated_at: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0),
-            messages: agent.messages().to_vec(),
+            created: session_created,
+            last_active: sessions::now_epoch(),
             preview: if first_preview.is_empty() { "(no messages)".into() } else { first_preview },
-            total_turns: session_turns,
-            total_input_tokens: cost.total_input_tokens,
-            total_output_tokens: cost.total_output_tokens,
-        };
-        if let Err(e) = sessions::save_session(&session) {
-            eprintln!("\x1b[33mFailed to save session: {e}\x1b[0m");
-        }
+            name: None,
+            turns: session_turns,
+            total_tokens: agent.cost().total_input_tokens + agent.cost().total_output_tokens,
+        });
+        sessions::cleanup_sessions(&cwd_str, 100);
     }
 
     // Save history for next session.
@@ -1133,27 +1237,3 @@ async fn run_inline_mode(
     Ok(())
 }
 
-/// Format epoch seconds to a human-readable timestamp.
-fn chrono_format(epoch: u64) -> String {
-    let secs = epoch;
-    let days = secs / 86400;
-    let hours = (secs % 86400) / 3600;
-    let mins = (secs % 3600) / 60;
-    // Approximate date from epoch.
-    let year = 1970 + days / 365;
-    let day_of_year = days % 365;
-    let month = day_of_year / 30 + 1;
-    let day = day_of_year % 30 + 1;
-    format!("{year}-{month:02}-{day:02} {hours:02}:{mins:02}")
-}
-
-/// Shorten a path string by replacing $HOME with ~.
-fn shorten_home_str(path: &str) -> String {
-    if let Some(home) = std::env::var_os("HOME") {
-        let home_str = home.to_string_lossy();
-        if path.starts_with(home_str.as_ref()) {
-            return format!("~{}", &path[home_str.len()..]);
-        }
-    }
-    path.to_string()
-}
