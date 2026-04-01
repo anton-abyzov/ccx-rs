@@ -107,6 +107,94 @@ pub fn load_skills_from_dir(dir: &Path) -> Result<Vec<Skill>, SkillError> {
     Ok(skills)
 }
 
+/// Discover all skills from standard locations:
+/// - `~/.claude/skills/` (user-level, flat .md + subdirs with SKILL.md)
+/// - `.claude/skills/` (project-level, flat .md + subdirs with SKILL.md)
+/// - specweave plugin skills via nvm
+pub fn discover_all_skills() -> Vec<Skill> {
+    let mut skills = Vec::new();
+    let mut seen_names = std::collections::HashSet::new();
+
+    let mut dirs: Vec<PathBuf> = Vec::new();
+
+    // User-level skills
+    if let Some(home) = dirs::home_dir() {
+        dirs.push(home.join(".claude/skills"));
+    }
+
+    // Project-level skills
+    dirs.push(PathBuf::from(".claude/skills"));
+
+    for dir in &dirs {
+        // Flat .md files
+        if let Ok(loaded) = load_skills_from_dir(dir) {
+            for skill in loaded {
+                if seen_names.insert(skill.name.clone()) {
+                    skills.push(skill);
+                }
+            }
+        }
+        // Subdirectory pattern: skill-name/SKILL.md
+        if let Ok(entries) = fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let subdir = entry.path();
+                if subdir.is_dir() {
+                    let skill_file = subdir.join("SKILL.md");
+                    if skill_file.exists() {
+                        if let Ok(skill) = load_skill(&skill_file) {
+                            if seen_names.insert(skill.name.clone()) {
+                                skills.push(skill);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Specweave plugin skills via nvm
+    if let Some(home) = dirs::home_dir() {
+        let nvm_base = home.join(".nvm/versions/node");
+        if let Ok(versions) = fs::read_dir(&nvm_base) {
+            for ver in versions.flatten() {
+                let plugins_dir = ver.path().join("lib/node_modules/specweave/plugins");
+                scan_plugin_skills(&plugins_dir, &mut skills, &mut seen_names);
+            }
+        }
+    }
+
+    skills
+}
+
+fn scan_plugin_skills(
+    plugins_dir: &Path,
+    skills: &mut Vec<Skill>,
+    seen: &mut std::collections::HashSet<String>,
+) {
+    let Ok(plugins) = fs::read_dir(plugins_dir) else {
+        return;
+    };
+    for plugin in plugins.flatten() {
+        let skills_dir = plugin.path().join("skills");
+        if !skills_dir.exists() {
+            continue;
+        }
+        let Ok(entries) = fs::read_dir(&skills_dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let skill_file = entry.path().join("SKILL.md");
+            if skill_file.exists() {
+                if let Ok(skill) = load_skill(&skill_file) {
+                    if seen.insert(skill.name.clone()) {
+                        skills.push(skill);
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn extract_field(text: &str, key: &str) -> String {
     let prefix = format!("{key}: ");
     for line in text.lines() {

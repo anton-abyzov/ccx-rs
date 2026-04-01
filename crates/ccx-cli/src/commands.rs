@@ -54,12 +54,13 @@ pub fn find_matches(prefix: &str) -> Vec<&'static SlashCommand> {
         .collect()
 }
 
-/// Print the full command list with ANSI styling.
-pub fn print_command_list() {
+/// Print the full command list with ANSI styling, including discovered skills.
+pub fn print_command_list(skills: &[(String, String)]) {
     const ACCENT: &str = "\x1b[38;2;204;120;80m";
     const DIM: &str = "\x1b[90m";
     const BOLD: &str = "\x1b[1m";
     const RESET: &str = "\x1b[0m";
+    const SKILL_ACCENT: &str = "\x1b[38;2;130;170;255m";
 
     println!("\n{BOLD}Available commands:{RESET}\n");
     for cmd in COMMANDS {
@@ -68,13 +69,28 @@ pub fn print_command_list() {
             cmd.name, cmd.description
         );
     }
+
+    if !skills.is_empty() {
+        println!("\n{BOLD}Skills ({}):{RESET}\n", skills.len());
+        for (name, desc) in skills {
+            println!(
+                "  {SKILL_ACCENT}{:<24}{RESET} {DIM}— {}{RESET}",
+                name, desc
+            );
+        }
+    }
     println!();
 }
 
-/// Print matching commands for partial input (e.g., "/he").
-pub fn print_suggestions(prefix: &str) {
-    let matches = find_matches(prefix);
-    if matches.is_empty() {
+/// Print matching commands for partial input (e.g., "/he"), including skills.
+pub fn print_suggestions(prefix: &str, skills: &[(String, String)]) {
+    let builtin_matches = find_matches(prefix);
+    let skill_matches: Vec<&(String, String)> = skills
+        .iter()
+        .filter(|(name, _)| name.starts_with(prefix))
+        .collect();
+
+    if builtin_matches.is_empty() && skill_matches.is_empty() {
         println!("\x1b[31mNo matching commands for '{prefix}'\x1b[0m");
         return;
     }
@@ -82,12 +98,19 @@ pub fn print_suggestions(prefix: &str) {
     const ACCENT: &str = "\x1b[38;2;204;120;80m";
     const DIM: &str = "\x1b[90m";
     const RESET: &str = "\x1b[0m";
+    const SKILL_ACCENT: &str = "\x1b[38;2;130;170;255m";
 
     println!();
-    for cmd in matches {
+    for cmd in builtin_matches {
         println!(
-            "  {ACCENT}{:<12}{RESET} {DIM}— {}{RESET}",
+            "  {ACCENT}{:<24}{RESET} {DIM}— {}{RESET}",
             cmd.name, cmd.description
+        );
+    }
+    for (name, desc) in skill_matches {
+        println!(
+            "  {SKILL_ACCENT}{:<24}{RESET} {DIM}— {}{RESET}",
+            name, desc
         );
     }
     println!();

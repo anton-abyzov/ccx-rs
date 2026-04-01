@@ -525,12 +525,29 @@ async fn run_inline_mode(
     ccx_tui::inline::render_footer_line(model);
     println!();
 
-    // Set up rustyline with tab completion and hints.
+    // Set up rustyline with tab completion, hints, and skill discovery.
     let config = rustyline::Config::builder()
         .completion_type(rustyline::CompletionType::List)
         .build();
     let mut rl = Editor::with_config(config)?;
-    rl.set_helper(Some(completer::CcxCompleter));
+    let ccx_completer = completer::CcxCompleter::new();
+    rl.set_helper(Some(ccx_completer));
+
+    // Discover skills for command handling and display.
+    let discovered_skills = ccx_skill::discover_all_skills();
+    let skill_display: Vec<(String, String)> = discovered_skills
+        .iter()
+        .map(|s| {
+            let desc = if s.description.len() > 60 {
+                format!("{}...", &s.description[..57])
+            } else if s.description.is_empty() {
+                s.name.clone()
+            } else {
+                s.description.clone()
+            };
+            (format!("/{}", s.name), desc)
+        })
+        .collect();
 
     // Load persistent history.
     let history_path = dirs::home_dir()
@@ -549,51 +566,93 @@ async fn run_inline_mode(
 
                 // Slash command handling.
                 if input.starts_with('/') {
-                    match input {
+                    // Check built-in commands first.
+                    let handled = match input {
                         "/exit" | "/quit" => break,
                         "/help" => {
-                            commands::print_command_list();
-                            continue;
+                            commands::print_command_list(&skill_display);
+                            true
                         }
                         "/clear" => {
                             print!("\x1b[2J\x1b[H");
                             std::io::stdout().flush()?;
-                            continue;
+                            true
                         }
                         "/cost" => {
                             println!("{}", agent.cost().summary());
-                            continue;
+                            true
                         }
                         "/model" => {
                             println!("Model: {model}");
-                            continue;
+                            true
                         }
                         "/compact" => {
                             println!("\x1b[90mContext compaction not yet implemented.\x1b[0m");
-                            continue;
+                            true
                         }
                         "/init" => {
                             println!("\x1b[90mCLAUDE.md creation not yet implemented.\x1b[0m");
-                            continue;
+                            true
                         }
                         "/version" => {
                             println!("ccx v{}", env!("CARGO_PKG_VERSION"));
-                            continue;
+                            true
                         }
                         "/tools" => {
                             let names = tool_names.join(", ");
                             println!("Available tools ({tool_count}): {names}");
-                            continue;
+                            true
                         }
                         "/" => {
-                            commands::print_command_list();
-                            continue;
+                            commands::print_command_list(&skill_display);
+                            true
                         }
-                        other => {
-                            commands::print_suggestions(other);
-                            continue;
-                        }
+                        _ => false,
+                    };
+
+                    if handled {
+                        continue;
                     }
+
+                    // Try to match a discovered skill.
+                    let after_slash = &input[1..];
+                    let (skill_query, skill_args) = match after_slash.split_once(' ') {
+                        Some((name, args)) => (name, Some(args)),
+                        None => (after_slash, None),
+                    };
+
+                    if let Some(skill) = ccx_skill::find_skill(&discovered_skills, skill_query) {
+                        let result = ccx_skill::expand_skill(skill, skill_args);
+                        let user_msg = if let Some(args) = skill_args {
+                            format!(
+                                "The user invoked skill '{}' with args: {}\n\n<skill-content>\n{}\n</skill-content>",
+                                skill.name, args, result.expanded_prompt
+                            )
+                        } else {
+                            format!(
+                                "The user invoked skill '{}'\n\n<skill-content>\n{}\n</skill-content>",
+                                skill.name, result.expanded_prompt
+                            )
+                        };
+
+                        ccx_tui::inline::render_user_message(input);
+
+                        let mut cb = InlineCallback::new();
+                        match agent.send_message(&user_msg, &mut cb).await {
+                            Ok(_) => cb.finish_text(),
+                            Err(e) => {
+                                cb.finish_text();
+                                ccx_tui::inline::render_error(&format!("Error: {e}"));
+                            }
+                        }
+
+                        ccx_tui::inline::render_separator();
+                        continue;
+                    }
+
+                    // No builtin or skill matched — show suggestions.
+                    commands::print_suggestions(input, &skill_display);
+                    continue;
                 }
 
                 ccx_tui::inline::render_user_message(input);
