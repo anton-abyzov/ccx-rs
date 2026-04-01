@@ -164,6 +164,12 @@ pub fn discover_all_skills() -> Vec<Skill> {
     let mut skills = Vec::new();
     let mut seen_names = std::collections::HashSet::new();
 
+    // Add built-in skills first (simplify, batch, commit, review, test).
+    for skill in crate::builtins::builtin_skills() {
+        seen_names.insert(skill.name.clone());
+        skills.push(skill);
+    }
+
     let mut dirs: Vec<PathBuf> = Vec::new();
 
     // User-level skills

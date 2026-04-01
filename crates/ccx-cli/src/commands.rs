@@ -92,7 +92,7 @@ pub fn find_matches(prefix: &str) -> Vec<&'static SlashCommand> {
 
 /// Print the full command list with ANSI styling, including discovered skills.
 pub fn print_command_list(skills: &[(String, String)]) {
-    const ACCENT: &str = "\x1b[38;2;204;120;80m";
+    const ACCENT: &str = "\x1b[38;2;138;99;210m";
     const DIM: &str = "\x1b[90m";
     const BOLD: &str = "\x1b[1m";
     const RESET: &str = "\x1b[0m";
@@ -131,7 +131,7 @@ pub fn print_suggestions(prefix: &str, skills: &[(String, String)]) {
         return;
     }
 
-    const ACCENT: &str = "\x1b[38;2;204;120;80m";
+    const ACCENT: &str = "\x1b[38;2;138;99;210m";
     const DIM: &str = "\x1b[90m";
     const RESET: &str = "\x1b[0m";
     const SKILL_ACCENT: &str = "\x1b[38;2;130;170;255m";

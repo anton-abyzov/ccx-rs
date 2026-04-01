@@ -102,7 +102,7 @@ impl Highlighter for CcxCompleter {
         prompt: &'p str,
         _default: bool,
     ) -> std::borrow::Cow<'b, str> {
-        std::borrow::Cow::Owned(format!("\x1b[38;2;204;120;80;1m{}\x1b[0m", prompt))
+        std::borrow::Cow::Owned(format!("\x1b[38;2;138;99;210;1m{}\x1b[0m", prompt))
     }
 
     fn highlight_hint<'h>(&self, hint: &'h str) -> std::borrow::Cow<'h, str> {

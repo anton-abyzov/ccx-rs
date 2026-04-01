@@ -1,7 +1,7 @@
 use ratatui::style::{Color, Modifier, Style};
 
-/// The warm orange/salmon color used for accents.
-pub const ACCENT: Color = Color::Rgb(204, 120, 80);
+/// Rich violet accent color.
+pub const ACCENT: Color = Color::Rgb(138, 99, 210);
 
 /// Pet/buddy orange-brown color.
 pub const PET: Color = Color::Rgb(190, 110, 60);
@@ -153,6 +153,6 @@ mod tests {
 
     #[test]
     fn test_accent_color() {
-        assert!(matches!(ACCENT, Color::Rgb(204, 120, 80)));
+        assert!(matches!(ACCENT, Color::Rgb(138, 99, 210)));
     }
 }

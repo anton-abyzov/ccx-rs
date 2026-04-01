@@ -9,8 +9,8 @@ use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use crossterm::terminal;
 
 // ANSI escape sequences.
-const ACCENT: &str = "\x1b[38;2;204;120;80m";
-const ACCENT_BOLD: &str = "\x1b[1;38;2;204;120;80m";
+const ACCENT: &str = "\x1b[38;2;138;99;210m";
+const ACCENT_BOLD: &str = "\x1b[1;38;2;138;99;210m";
 const GREEN: &str = "\x1b[38;2;80;200;120m";
 const DIM: &str = "\x1b[90m";
 const BOLD: &str = "\x1b[1m";
@@ -474,7 +474,7 @@ mod tests {
     fn test_strip_ansi() {
         assert_eq!(strip_ansi("\x1b[32mhello\x1b[0m"), "hello");
         assert_eq!(strip_ansi("no escapes"), "no escapes");
-        assert_eq!(strip_ansi("\x1b[1;38;2;204;120;80mtext\x1b[0m"), "text");
+        assert_eq!(strip_ansi("\x1b[1;38;2;138;99;210mtext\x1b[0m"), "text");
     }
 
     #[test]
