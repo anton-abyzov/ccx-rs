@@ -7,7 +7,7 @@ use std::collections::{HashMap, VecDeque};
 use std::pin::Pin;
 
 use futures::stream::{self, BoxStream, Stream, StreamExt};
-use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE};
+use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 
@@ -29,9 +29,18 @@ pub struct OpenAiClient {
 impl OpenAiClient {
     /// Create a client configured for OpenRouter.
     pub fn openrouter(api_key: &str, model: &str) -> Self {
+        // Aggressively sanitize key: trim whitespace, strip surrounding quotes,
+        // and remove any non-visible-ASCII characters that break HTTP headers.
+        let clean_key: String = api_key
+            .trim()
+            .trim_matches('"')
+            .trim_matches('\'')
+            .chars()
+            .filter(|c| c.is_ascii_graphic() || *c == ' ')
+            .collect();
         Self {
             http: reqwest::Client::new(),
-            api_key: api_key.trim().to_string(),
+            api_key: clean_key,
             base_url: "https://openrouter.ai/api/v1".to_string(),
             model: model.trim().to_string(),
         }
@@ -67,9 +76,26 @@ impl OpenAiClient {
         }
 
         let mut headers = HeaderMap::new();
-        let auth_value = HeaderValue::from_str(&format!("Bearer {}", self.api_key))
-            .map_err(|e| Error::InvalidHeader(format!("Authorization: {e}")))?;
-        headers.insert("Authorization", auth_value);
+        let bearer = format!("Bearer {}", self.api_key);
+        let auth_value = HeaderValue::from_str(&bearer).map_err(|_| {
+            // Show which byte is invalid to help diagnose key issues.
+            let bad: Vec<String> = bearer
+                .bytes()
+                .enumerate()
+                .filter(|(_, b)| !(0x20..=0x7e).contains(b) && *b != b'\t')
+                .map(|(i, b)| format!("byte 0x{b:02x} at pos {i}"))
+                .collect();
+            Error::InvalidHeader(format!(
+                "Authorization header contains invalid chars: {}. Key length={}",
+                if bad.is_empty() {
+                    "unknown".to_string()
+                } else {
+                    bad.join(", ")
+                },
+                self.api_key.len()
+            ))
+        })?;
+        headers.insert(AUTHORIZATION, auth_value);
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         headers.insert(
             "HTTP-Referer",
