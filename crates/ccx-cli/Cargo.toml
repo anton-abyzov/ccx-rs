@@ -31,3 +31,5 @@ futures = { workspace = true }
 serde_json = { workspace = true }
 rustyline = { version = "14", features = ["derive"] }
 dirs = "5"
+log = { workspace = true }
+env_logger = { workspace = true }
