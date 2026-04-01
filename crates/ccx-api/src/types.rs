@@ -35,6 +35,16 @@ pub struct MessageRequest {
     pub tools: Option<Vec<Tool>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<ThinkingConfig>,
+}
+
+/// Configuration for requesting extended thinking.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThinkingConfig {
+    #[serde(rename = "type")]
+    pub thinking_type: String,
+    pub budget_tokens: u32,
 }
 
 /// An input message in the request.

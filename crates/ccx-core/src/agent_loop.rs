@@ -1,6 +1,6 @@
 use ccx_api::{
     ApiClient, ContentBlock, Delta, InputMessage, MessageContent, MessageRequest, Role,
-    StopReason, StreamEvent,
+    StopReason, StreamEvent, ThinkingConfig,
 };
 use futures::StreamExt;
 
@@ -51,6 +51,7 @@ pub struct AgentLoop {
     max_turns: usize,
     cost: CostTracker,
     retry_config: RetryConfig,
+    thinking: Option<ThinkingConfig>,
 }
 
 /// Callback for streaming events.
@@ -97,6 +98,7 @@ impl AgentLoop {
             max_turns: 50,
             cost: CostTracker::new(),
             retry_config: RetryConfig::default(),
+            thinking: None,
         }
     }
 
@@ -106,6 +108,10 @@ impl AgentLoop {
 
     pub fn set_retry_config(&mut self, config: RetryConfig) {
         self.retry_config = config;
+    }
+
+    pub fn set_thinking(&mut self, config: ThinkingConfig) {
+        self.thinking = Some(config);
     }
 
     pub fn messages(&self) -> &[InputMessage] {
@@ -136,12 +142,13 @@ impl AgentLoop {
 
             let req = MessageRequest {
                 model: String::new(),
-                max_tokens: 16384,
+                max_tokens: if self.thinking.is_some() { 32768 } else { 16384 },
                 messages: self.messages.clone(),
                 system: Some(self.system_prompt.clone()),
                 temperature: None,
                 tools: Some(self.registry.tool_definitions()),
                 stream: Some(true),
+                thinking: self.thinking.clone(),
             };
 
             // Execute with rate limit retry.
@@ -193,8 +200,10 @@ impl AgentLoop {
                 content: MessageContent::Blocks(content),
             });
 
-            // Execute tool calls if the model requested them.
+            // Execute tool calls in parallel if the model requested them.
             if stop_reason == Some(StopReason::ToolUse) && !tool_calls.is_empty() {
+                // Phase 1: Check permissions sequentially (may prompt user).
+                let mut approved = Vec::new();
                 let mut results = Vec::new();
                 for (id, name, input) in tool_calls {
                     if !callback.should_allow_tool(&name, &input) {
@@ -206,10 +215,18 @@ impl AgentLoop {
                         continue;
                     }
                     callback.on_tool_start(&name, &input);
-                    let result =
-                        self.registry.execute(&name, input, &self.context).await;
-                    callback.on_tool_end(&name, &result);
+                    approved.push((id, name, input));
+                }
 
+                // Phase 2: Execute all approved tools in parallel.
+                let futures: Vec<_> = approved.iter().map(|(_, name, input)| {
+                    self.registry.execute(name, input.clone(), &self.context)
+                }).collect();
+                let exec_results = futures::future::join_all(futures).await;
+
+                // Phase 3: Collect results and fire callbacks.
+                for ((id, name, _), result) in approved.into_iter().zip(exec_results) {
+                    callback.on_tool_end(&name, &result);
                     let (tool_content, is_error) = match result {
                         Ok(r) => (r.content, r.is_error),
                         Err(e) => (e.to_string(), true),

@@ -2,6 +2,7 @@ use std::fs;
 use std::path::Path;
 
 use async_trait::async_trait;
+use base64::Engine;
 use ccx_core::{Tool, ToolContext, ToolError, ToolResult};
 use serde_json::json;
 
@@ -68,6 +69,36 @@ impl Tool for FileReadTool {
             return Err(ToolError::Execution(format!(
                 "{file_path} is a directory, not a file. Use Bash with 'ls' to list directory contents."
             )));
+        }
+
+        // Check for image/PDF extensions before reading — return base64 for these.
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+
+        if matches!(
+            ext.as_str(),
+            "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "pdf"
+        ) {
+            let bytes = fs::read(file_path).map_err(|e| {
+                ToolError::Execution(format!("failed to read {file_path}: {e}"))
+            })?;
+            let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+            let mime = match ext.as_str() {
+                "png" => "image/png",
+                "jpg" | "jpeg" => "image/jpeg",
+                "gif" => "image/gif",
+                "webp" => "image/webp",
+                "svg" => "image/svg+xml",
+                "pdf" => "application/pdf",
+                _ => "application/octet-stream",
+            };
+            return Ok(ToolResult {
+                content: format!("data:{mime};base64,{b64}"),
+                is_error: false,
+            });
         }
 
         // Read raw bytes first for binary detection and size check.
@@ -285,6 +316,43 @@ mod tests {
             .unwrap();
         assert!(result.content.contains("more lines"));
         assert!(result.content.contains("100 total"));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_file_read_image_png() {
+        let dir = std::env::temp_dir().join("ccx_test_read_img");
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("test.png");
+        // Write a minimal PNG-like binary payload.
+        fs::write(&path, b"\x89PNG\r\n\x1a\n\x00\x00").unwrap();
+
+        let tool = FileReadTool;
+        let result = tool
+            .execute(json!({"file_path": path.to_str().unwrap()}), &test_ctx())
+            .await
+            .unwrap();
+        assert!(result.content.starts_with("data:image/png;base64,"));
+        assert!(!result.is_error);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_file_read_pdf() {
+        let dir = std::env::temp_dir().join("ccx_test_read_pdf");
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("test.pdf");
+        fs::write(&path, b"%PDF-1.4 fake").unwrap();
+
+        let tool = FileReadTool;
+        let result = tool
+            .execute(json!({"file_path": path.to_str().unwrap()}), &test_ctx())
+            .await
+            .unwrap();
+        assert!(result.content.starts_with("data:application/pdf;base64,"));
+        assert!(!result.is_error);
 
         let _ = fs::remove_dir_all(&dir);
     }

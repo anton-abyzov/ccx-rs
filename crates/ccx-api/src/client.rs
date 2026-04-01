@@ -61,15 +61,20 @@ impl ClaudeClient {
         req.model = self.model.clone();
         req.stream = Some(true);
 
+        // Build beta features list.
+        let mut betas = vec!["prompt-caching-2024-07-31"];
+        if self.use_oauth {
+            betas.push("oauth-2025-04-20");
+        }
+        if req.thinking.is_some() {
+            betas.push("extended-thinking-2025-04-14");
+        }
+
         let mut headers = HeaderMap::new();
         if self.use_oauth {
             headers.insert(
                 "Authorization",
                 HeaderValue::from_str(&format!("Bearer {}", self.api_key)).unwrap(),
-            );
-            headers.insert(
-                "anthropic-beta",
-                HeaderValue::from_static("oauth-2025-04-20"),
             );
         } else {
             headers.insert("x-api-key", HeaderValue::from_str(&self.api_key).unwrap());
@@ -79,12 +84,30 @@ impl ClaudeClient {
             HeaderValue::from_static(API_VERSION),
         );
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        headers.insert(
+            "anthropic-beta",
+            HeaderValue::from_str(&betas.join(",")).unwrap(),
+        );
+
+        // Build JSON body with structured system prompt for cache_control.
+        let mut body = serde_json::to_value(&req).unwrap_or_default();
+        if let Some(system_text) = &req.system {
+            body["system"] = serde_json::json!([{
+                "type": "text",
+                "text": system_text,
+                "cache_control": {"type": "ephemeral"}
+            }]);
+        }
+        // Strip temperature when thinking is enabled (API requirement).
+        if req.thinking.is_some() {
+            body.as_object_mut().map(|o| o.remove("temperature"));
+        }
 
         let response = self
             .http
             .post(format!("{API_BASE}/messages"))
             .headers(headers)
-            .json(&req)
+            .json(&body)
             .send()
             .await?;
 
@@ -243,6 +266,7 @@ mod tests {
             temperature: None,
             tools: None,
             stream: Some(true),
+            thinking: None,
         };
 
         let json = serde_json::to_value(&req).unwrap();

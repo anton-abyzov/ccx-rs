@@ -36,11 +36,12 @@ pub fn build_full_system_prompt(
     parts.join("\n")
 }
 
-/// Minimal tool schema for inclusion in the system prompt.
+/// Tool schema for inclusion in the system prompt, including the full JSON input schema.
 #[derive(Debug, Clone)]
 pub struct ToolSchema {
     pub name: String,
     pub description: String,
+    pub input_schema: Option<serde_json::Value>,
 }
 
 const ROLE_DESCRIPTION: &str = "\
@@ -93,9 +94,14 @@ fn build_environment_section(working_dir: &str) -> String {
 }
 
 fn build_tools_section(tools: &[ToolSchema]) -> String {
-    let mut section = String::from("\n# Available Tools\n");
+    let mut section = String::from("\n# Available Tools\n\n");
     for tool in tools {
-        section.push_str(&format!("- **{}**: {}\n", tool.name, tool.description));
+        section.push_str(&format!("### {}\n{}\n\n", tool.name, tool.description));
+        if let Some(ref schema) = tool.input_schema {
+            if let Ok(pretty) = serde_json::to_string_pretty(schema) {
+                section.push_str(&format!("Input schema:\n```json\n{pretty}\n```\n\n"));
+            }
+        }
     }
     section
 }
@@ -132,16 +138,27 @@ mod tests {
             ToolSchema {
                 name: "Bash".into(),
                 description: "Execute bash commands".into(),
+                input_schema: Some(serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "command": { "type": "string" }
+                    },
+                    "required": ["command"]
+                })),
             },
             ToolSchema {
                 name: "Read".into(),
                 description: "Read files".into(),
+                input_schema: None,
             },
         ];
         let prompt = build_full_system_prompt(&[], "/tmp", &tools);
         assert!(prompt.contains("Available Tools"));
-        assert!(prompt.contains("**Bash**"));
-        assert!(prompt.contains("**Read**"));
+        assert!(prompt.contains("### Bash"));
+        assert!(prompt.contains("### Read"));
+        // Bash has schema — verify it appears.
+        assert!(prompt.contains("Input schema:"));
+        assert!(prompt.contains("\"command\""));
     }
 
     #[test]
@@ -165,6 +182,7 @@ mod tests {
         let tools = vec![ToolSchema {
             name: "Grep".into(),
             description: "Search code".into(),
+            input_schema: None,
         }];
         let prompt = build_full_system_prompt(&files, "/home/project", &tools);
 
@@ -188,9 +206,12 @@ mod tests {
         let tools = vec![ToolSchema {
             name: "Test".into(),
             description: "A test tool".into(),
+            input_schema: Some(serde_json::json!({"type": "object"})),
         }];
         let section = build_tools_section(&tools);
-        assert!(section.contains("**Test**: A test tool"));
+        assert!(section.contains("### Test"));
+        assert!(section.contains("A test tool"));
+        assert!(section.contains("Input schema:"));
     }
 
     #[test]

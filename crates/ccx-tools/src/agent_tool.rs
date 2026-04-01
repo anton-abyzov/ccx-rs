@@ -27,10 +27,34 @@ impl Tool for AgentTool {
                     "type": "string",
                     "description": "Short (3-5 word) description of the task"
                 },
+                "subagent_type": {
+                    "type": "string",
+                    "description": "Specialized agent type: general-purpose, Explore, Plan"
+                },
+                "model": {
+                    "type": "string",
+                    "description": "Override model for this agent (e.g. claude-opus-4-6)"
+                },
+                "name": {
+                    "type": "string",
+                    "description": "Named agent, addressable via SendMessage"
+                },
+                "team_name": {
+                    "type": "string",
+                    "description": "Team name for the spawned agent to join"
+                },
+                "mode": {
+                    "type": "string",
+                    "description": "Permission mode: bypassPermissions, plan, default, etc."
+                },
                 "run_in_background": {
                     "type": "boolean",
-                    "description": "If true and tmux available, spawn in a new pane",
+                    "description": "If true, spawn async and return agent ID immediately",
                     "default": false
+                },
+                "isolation": {
+                    "type": "string",
+                    "description": "Isolation mode: 'worktree' for git worktree isolation"
                 }
             },
             "required": ["prompt", "description"]
@@ -49,17 +73,34 @@ impl Tool for AgentTool {
             .as_str()
             .unwrap_or("sub-agent task");
         let run_in_background = input["run_in_background"].as_bool().unwrap_or(false);
+        let model_override = input["model"].as_str().map(|s| s.to_string());
+        let agent_name = input["name"].as_str().map(|s| s.to_string());
+        let _subagent_type = input["subagent_type"].as_str().unwrap_or("general-purpose");
+        let _team_name = input["team_name"].as_str().map(|s| s.to_string());
+        let _mode = input["mode"].as_str().map(|s| s.to_string());
+        let _isolation = input["isolation"].as_str().map(|s| s.to_string());
+
+        let opts = AgentOpts {
+            model_override,
+            agent_name,
+        };
 
         // Try process-based agent first.
-        match run_process_agent(prompt, description, ctx, run_in_background).await {
+        match run_process_agent(prompt, description, ctx, run_in_background, &opts).await {
             Ok(result) => return Ok(result),
             Err(_) => {
                 // Fall back to in-process agent.
             }
         }
 
-        run_inprocess_agent(prompt, description, ctx).await
+        run_inprocess_agent(prompt, description, ctx, &opts).await
     }
+}
+
+/// Options parsed from the Agent tool input.
+struct AgentOpts {
+    model_override: Option<String>,
+    agent_name: Option<String>,
 }
 
 /// Try to spawn a sub-agent as a separate `ccx chat` process.
@@ -68,18 +109,57 @@ async fn run_process_agent(
     description: &str,
     ctx: &ToolContext,
     run_in_background: bool,
+    opts: &AgentOpts,
 ) -> Result<ToolResult, ToolError> {
     let ccx_bin = find_ccx_binary()?;
 
     let api_key = std::env::var("ANTHROPIC_API_KEY")
         .map_err(|_| ToolError::Execution("ANTHROPIC_API_KEY not set".into()))?;
 
-    let model = std::env::var("CCX_MODEL")
-        .unwrap_or_else(|_| "claude-sonnet-4-6".into());
+    let model = opts
+        .model_override
+        .clone()
+        .or_else(|| std::env::var("CCX_MODEL").ok())
+        .unwrap_or_else(|| "claude-sonnet-4-6".into());
 
     // If background mode and tmux is available, spawn in a new pane.
     if run_in_background && std::env::var("TMUX").is_ok() {
         return spawn_tmux_agent(&ccx_bin, prompt, &api_key, &model, ctx, description).await;
+    }
+
+    // Background mode without tmux: spawn async and return agent ID.
+    if run_in_background {
+        let agent_id = opts
+            .agent_name
+            .clone()
+            .unwrap_or_else(|| format!("agent-{}", std::process::id()));
+        let ccx_bin = ccx_bin.clone();
+        let prompt = prompt.to_string();
+        let model = model.clone();
+        let api_key = api_key.clone();
+        let working_dir = ctx.working_dir.clone();
+
+        tokio::spawn(async move {
+            let _ = tokio::process::Command::new(&ccx_bin)
+                .arg("chat")
+                .arg("--prompt")
+                .arg(&prompt)
+                .arg("--dangerously-skip-permissions")
+                .arg("--model")
+                .arg(&model)
+                .env("ANTHROPIC_API_KEY", &api_key)
+                .current_dir(&working_dir)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .output()
+                .await;
+        });
+
+        return Ok(ToolResult {
+            content: format!("Agent '{description}' launched in background (id: {agent_id})"),
+            is_error: false,
+        });
     }
 
     // Foreground: spawn process, capture output.
@@ -198,12 +278,16 @@ async fn run_inprocess_agent(
     prompt: &str,
     description: &str,
     ctx: &ToolContext,
+    opts: &AgentOpts,
 ) -> Result<ToolResult, ToolError> {
     let api_key = std::env::var("ANTHROPIC_API_KEY")
         .map_err(|_| ToolError::Execution("ANTHROPIC_API_KEY not set".into()))?;
 
-    let model = std::env::var("CCX_MODEL")
-        .unwrap_or_else(|_| "claude-sonnet-4-6".into());
+    let model = opts
+        .model_override
+        .clone()
+        .or_else(|| std::env::var("CCX_MODEL").ok())
+        .unwrap_or_else(|| "claude-sonnet-4-6".into());
 
     let client = ccx_api::ApiClient::Claude(ccx_api::ClaudeClient::new(&api_key, &model));
 
@@ -258,8 +342,14 @@ mod tests {
         let required = schema["required"].as_array().unwrap();
         assert!(required.iter().any(|v| v == "prompt"));
         assert!(required.iter().any(|v| v == "description"));
-        // New field.
-        assert!(schema["properties"]["run_in_background"].is_object());
+        let props = &schema["properties"];
+        assert!(props["run_in_background"].is_object());
+        assert!(props["subagent_type"].is_object());
+        assert!(props["model"].is_object());
+        assert!(props["name"].is_object());
+        assert!(props["team_name"].is_object());
+        assert!(props["mode"].is_object());
+        assert!(props["isolation"].is_object());
     }
 
     #[tokio::test]

@@ -49,6 +49,14 @@ enum Commands {
         #[arg(long)]
         dangerously_skip_permissions: bool,
 
+        /// Enable extended thinking
+        #[arg(long)]
+        thinking: bool,
+
+        /// Thinking token budget (requires --thinking, default 10000)
+        #[arg(long, default_value = "10000")]
+        thinking_budget: u32,
+
         /// Provider: anthropic (default), openrouter
         #[arg(long, default_value = "anthropic")]
         provider: String,
@@ -74,6 +82,8 @@ async fn main() {
             max_turns,
             tui,
             dangerously_skip_permissions,
+            thinking,
+            thinking_budget,
             provider,
             openrouter_key,
         } => {
@@ -85,6 +95,8 @@ async fn main() {
                 max_turns,
                 tui,
                 dangerously_skip_permissions,
+                thinking,
+                thinking_budget,
                 &provider,
                 openrouter_key.as_deref(),
             )
@@ -126,6 +138,8 @@ async fn run_chat(
     max_turns: usize,
     use_tui: bool,
     dangerously_skip_permissions: bool,
+    thinking: bool,
+    thinking_budget: u32,
     provider: &str,
     openrouter_key: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -187,6 +201,7 @@ async fn run_chat(
             registry.get(name).map(|t| ccx_prompt::ToolSchema {
                 name: t.name().to_string(),
                 description: t.description().to_string(),
+                input_schema: Some(t.input_schema()),
             })
         })
         .collect();
@@ -202,6 +217,12 @@ async fn run_chat(
     let ctx = ccx_core::ToolContext::new(cwd.clone());
     let mut agent = ccx_core::AgentLoop::new(client, registry, ctx, system_prompt);
     agent.set_max_turns(max_turns);
+    if thinking {
+        agent.set_thinking(ccx_api::ThinkingConfig {
+            thinking_type: "enabled".to_string(),
+            budget_tokens: thinking_budget,
+        });
+    }
 
     if let Some(text) = prompt {
         // Non-interactive single-shot mode.
