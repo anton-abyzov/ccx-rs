@@ -238,19 +238,29 @@ pub fn render_separator() {
 
 /// Print the session footer with model info.
 pub fn render_footer(model: &str) {
+    render_footer_with_effort(model, "high");
+}
+
+/// Print the session footer with model and effort level.
+pub fn render_footer_with_effort(model: &str, effort: &str) {
     let width = term_width().min(80);
     println!("\n{DIM}{}{RESET}", "─".repeat(width));
-    render_footer_line(model);
+    render_footer_line_with_effort(model, effort);
 }
 
 /// Print just the footer info line (used after welcome panel and at session end).
 pub fn render_footer_line(model: &str) {
+    render_footer_line_with_effort(model, "high");
+}
+
+/// Print footer with model and effort level.
+pub fn render_footer_line_with_effort(model: &str, effort: &str) {
     let width = term_width().min(80);
     let left = "? for shortcuts";
-    let right = format!("● {model} · /effort");
+    let right = format!("● {model} · effort:{effort}");
     let gap = width.saturating_sub(left.len() + right.len());
     println!(
-        "{DIM}{left}{RESET}{}{GREEN}●{RESET} {DIM}{model} · /effort{RESET}",
+        "{DIM}{left}{RESET}{}{GREEN}●{RESET} {DIM}{model} · effort:{effort}{RESET}",
         " ".repeat(gap)
     );
 }

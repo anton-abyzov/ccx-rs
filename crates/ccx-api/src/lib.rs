@@ -22,6 +22,13 @@ impl ApiClient {
         }
     }
 
+    pub fn set_model(&mut self, model: &str) {
+        match self {
+            Self::Claude(c) => c.set_model(model),
+            Self::OpenAi(c) => c.set_model(model),
+        }
+    }
+
     pub async fn stream_message(
         &self,
         req: MessageRequest,

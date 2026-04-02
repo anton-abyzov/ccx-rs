@@ -52,6 +52,11 @@ impl ClaudeClient {
         &self.model
     }
 
+    /// Change the model at runtime.
+    pub fn set_model(&mut self, model: &str) {
+        self.model = model.to_string();
+    }
+
     /// Send a streaming message request and return a stream of events.
     pub async fn stream_message(
         &self,

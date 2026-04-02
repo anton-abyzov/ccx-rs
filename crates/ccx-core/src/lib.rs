@@ -6,7 +6,7 @@ pub mod hooks;
 pub mod tool;
 
 pub use agent::{AgentDef, AgentError, AgentManager, AgentMessage, AgentResult};
-pub use agent_loop::{AgentCallback, AgentLoop, AgentLoopError, NoopCallback};
+pub use agent_loop::{AgentCallback, AgentLoop, AgentLoopError, NoopCallback, RetryConfig};
 pub use context::ToolContext;
 pub use cost::CostTracker;
 pub use hooks::{Hook, HookEvent, HookRegistry, HookResult};

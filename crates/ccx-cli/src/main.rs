@@ -16,11 +16,45 @@ use rustyline::Editor;
 #[command(name = "ccx", version, about)]
 struct Cli {
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 
     /// Logging level (trace, debug, info, warn, error)
     #[arg(long, global = true, default_value = "info")]
     log_level: String,
+
+    // ── Top-level flags forwarded to Chat when no subcommand given ──
+
+    /// Model to use
+    #[arg(long, global = true)]
+    model: Option<String>,
+
+    /// Effort level: low, medium, high (default), max
+    #[arg(long, global = true)]
+    effort: Option<String>,
+
+    /// Replace the entire system prompt
+    #[arg(long, global = true)]
+    system_prompt: Option<String>,
+
+    /// Append text to the default system prompt
+    #[arg(long, global = true)]
+    append_system_prompt: Option<String>,
+
+    /// Output format: text (default), json, stream-json
+    #[arg(long, global = true)]
+    output_format: Option<String>,
+
+    /// Maximum spend in USD before refusing further API calls
+    #[arg(long, global = true)]
+    max_budget_usd: Option<f64>,
+
+    /// Pipe mode: read prompt from args/stdin, print response, exit
+    #[arg(short = 'p', long, global = true)]
+    print: bool,
+
+    /// Trailing arguments used as prompt in pipe mode
+    #[arg(trailing_var_arg = true)]
+    args: Vec<String>,
 }
 
 #[derive(Subcommand)]
@@ -86,6 +120,30 @@ enum Commands {
         /// Continue the most recent session for this directory
         #[arg(long = "continue")]
         continue_session: bool,
+
+        /// Effort level: low, medium, high (default), max
+        #[arg(long, default_value = "high")]
+        effort: String,
+
+        /// Replace the entire system prompt
+        #[arg(long)]
+        system_prompt: Option<String>,
+
+        /// Append text to the default system prompt
+        #[arg(long)]
+        append_system_prompt: Option<String>,
+
+        /// Output format: text (default), json, stream-json
+        #[arg(long, default_value = "text")]
+        output_format: String,
+
+        /// Maximum spend in USD before refusing further API calls
+        #[arg(long)]
+        max_budget_usd: Option<f64>,
+
+        /// Pipe mode: read prompt from args/stdin, print response, exit
+        #[arg(short = 'p', long)]
+        print: bool,
     },
     /// Show version and crate information
     Info,
@@ -113,7 +171,43 @@ async fn main() {
 
     log::info!("Starting ccx with log level: {}", cli.log_level);
 
-    match cli.command {
+    // GAP 1: default to Chat when no subcommand given.
+    let command = cli.command.unwrap_or_else(|| {
+        // Check if -p / --print was passed at top level.
+        let print_mode = cli.print;
+        // Collect trailing args as prompt for pipe mode.
+        let prompt_from_args = if !cli.args.is_empty() {
+            Some(cli.args.join(" "))
+        } else {
+            None
+        };
+
+        Commands::Chat {
+            model: cli.model.unwrap_or_else(|| "claude-sonnet-4-6".into()),
+            api_key: None,
+            prompt: if print_mode { prompt_from_args } else { None },
+            permission_mode: "bypass".into(),
+            max_turns: 200,
+            tui: false,
+            dangerously_skip_permissions: false,
+            no_thinking: false,
+            thinking_budget: 10000,
+            hide_thinking: false,
+            sandbox: false,
+            provider: "anthropic".into(),
+            openrouter_key: None,
+            resume: None,
+            continue_session: false,
+            effort: cli.effort.unwrap_or_else(|| "high".into()),
+            system_prompt: cli.system_prompt,
+            append_system_prompt: cli.append_system_prompt,
+            output_format: cli.output_format.unwrap_or_else(|| "text".into()),
+            max_budget_usd: cli.max_budget_usd,
+            print: print_mode,
+        }
+    });
+
+    match command {
         Commands::Chat {
             model,
             api_key,
@@ -130,6 +224,12 @@ async fn main() {
             openrouter_key,
             resume,
             continue_session,
+            effort,
+            system_prompt,
+            append_system_prompt,
+            output_format,
+            max_budget_usd,
+            print,
         } => {
             if let Err(e) = run_chat(
                 &model,
@@ -147,6 +247,12 @@ async fn main() {
                 openrouter_key.as_deref(),
                 resume.as_deref(),
                 continue_session,
+                &effort,
+                system_prompt.as_deref(),
+                append_system_prompt.as_deref(),
+                &output_format,
+                max_budget_usd,
+                print,
             )
             .await
             {
@@ -178,6 +284,17 @@ fn print_info() {
     println!("  ccx-tui        - Terminal UI");
 }
 
+/// Map effort level to (max_tokens, thinking_enabled, thinking_budget).
+fn effort_config(effort: &str) -> (u32, bool, u32) {
+    match effort {
+        "low" => (1024, false, 0),
+        "medium" => (4096, false, 0),
+        "high" => (16384, true, 10000),
+        "max" => (32768, true, 32000),
+        _ => (16384, true, 10000),
+    }
+}
+
 async fn run_chat(
     model: &str,
     explicit_key: Option<&str>,
@@ -194,6 +311,12 @@ async fn run_chat(
     openrouter_key: Option<&str>,
     resume_id: Option<&str>,
     continue_session: bool,
+    effort: &str,
+    custom_system_prompt: Option<&str>,
+    append_system_prompt: Option<&str>,
+    output_format: &str,
+    max_budget_usd: Option<f64>,
+    print_mode: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Resolve client based on provider.
     let or_key_env = std::env::var("OPENROUTER_API_KEY").ok();
@@ -273,12 +396,22 @@ async fn run_chat(
             description: s.description.clone(),
         })
         .collect();
-    let mut system_prompt = ccx_prompt::build_full_system_prompt(
-        &claude_md_files,
-        &cwd.to_string_lossy(),
-        &tool_schemas,
-        &skill_infos,
-    );
+    // GAP 3: --system-prompt / --append-system-prompt
+    let mut system_prompt = if let Some(custom) = custom_system_prompt {
+        custom.to_string()
+    } else {
+        ccx_prompt::build_full_system_prompt(
+            &claude_md_files,
+            &cwd.to_string_lossy(),
+            &tool_schemas,
+            &skill_infos,
+        )
+    };
+
+    if let Some(extra) = append_system_prompt {
+        system_prompt.push_str("\n\n");
+        system_prompt.push_str(extra);
+    }
 
     // Wire memory: load memories and inject into system prompt.
     let memory_dir = dirs::home_dir()
@@ -304,15 +437,53 @@ async fn run_chat(
 
     let mut agent = ccx_core::AgentLoop::new(client, registry, ctx, system_prompt);
     agent.set_max_turns(max_turns);
-    // Thinking enabled by default for Anthropic; disable with --no-thinking or --thinking-budget 0.
-    let thinking_enabled = provider == "anthropic" && !no_thinking && thinking_budget > 0;
-    if thinking_enabled {
+
+    // GAP 2: effort level controls max_tokens and thinking.
+    let (effort_tokens, effort_thinking, effort_budget) = effort_config(effort);
+    agent.set_max_tokens(effort_tokens);
+
+    // Thinking: effort level provides defaults, explicit flags override.
+    let thinking_enabled = provider == "anthropic" && !no_thinking
+        && (effort_thinking || thinking_budget > 0);
+    let final_budget = if no_thinking || thinking_budget == 0 {
+        0
+    } else if thinking_budget != 10000 {
+        // Explicit --thinking-budget overrides effort
+        thinking_budget
+    } else {
+        effort_budget
+    };
+    if thinking_enabled && final_budget > 0 {
         agent.set_thinking(ccx_api::ThinkingConfig {
             thinking_type: "enabled".to_string(),
-            budget_tokens: thinking_budget,
+            budget_tokens: final_budget,
         });
     }
+
+    // GAP 5: --max-budget-usd
+    if let Some(budget) = max_budget_usd {
+        agent.set_max_budget_usd(budget);
+    }
+
     let show_thinking = !hide_thinking;
+
+    // GAP 6: -p / --print pipe mode
+    if print_mode {
+        let text = if let Some(p) = prompt {
+            p.to_string()
+        } else {
+            // Read from stdin.
+            use std::io::Read;
+            let mut buf = String::new();
+            std::io::stdin().read_to_string(&mut buf)?;
+            buf.trim().to_string()
+        };
+        if text.is_empty() {
+            eprintln!("Error: no prompt provided. Pass text as argument or via stdin.");
+            std::process::exit(1);
+        }
+        return run_pipe_mode(&mut agent, &text, output_format).await;
+    }
 
     if let Some(text) = prompt {
         // Non-interactive single-shot mode.
@@ -320,7 +491,7 @@ async fn run_chat(
         if let Some(ref email) = email {
             eprintln!("Account: {email}");
         }
-        eprintln!("Model: {model} | Mode: {mode:?} | Tools: {tool_count}");
+        eprintln!("Model: {model} | Mode: {mode:?} | Effort: {effort} | Tools: {tool_count}");
         run_single_shot(&mut agent, text, show_thinking).await?;
     } else {
         // Interactive mode (inline default, full-screen TUI with --tui).
@@ -329,7 +500,7 @@ async fn run_chat(
         if use_tui {
             run_tui_mode(&mut agent, model, &auth_source, &cwd_display, tool_count, email.as_deref()).await?;
         } else {
-            run_inline_mode(&mut agent, model, &auth_source, &cwd_display, &tool_names, bypass_permissions, email.as_deref(), show_thinking, resume_id, continue_session).await?;
+            run_inline_mode(&mut agent, model, &auth_source, &cwd_display, &tool_names, bypass_permissions, email.as_deref(), show_thinking, resume_id, continue_session, effort).await?;
         }
     }
 
@@ -359,6 +530,90 @@ async fn run_single_shot(
     println!();
     eprintln!("\n{}", agent.cost().summary());
     Ok(())
+}
+
+/// GAP 6: Pipe mode — read prompt, print plain response, exit.
+/// GAP 4: Supports --output-format text/json/stream-json.
+async fn run_pipe_mode(
+    agent: &mut ccx_core::AgentLoop,
+    text: &str,
+    output_format: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match output_format {
+        "json" => {
+            // Collect full response, output as JSON.
+            let mut cb = ccx_core::NoopCallback;
+            let result = agent.send_message(text, &mut cb).await?;
+            let json = serde_json::json!({
+                "response": result,
+                "model": agent.model(),
+                "cost": {
+                    "input_tokens": agent.cost().total_input_tokens,
+                    "output_tokens": agent.cost().total_output_tokens,
+                    "total_usd": agent.cost().estimated_cost_usd(),
+                },
+            });
+            println!("{}", serde_json::to_string_pretty(&json)?);
+        }
+        "stream-json" => {
+            // Stream each event as a JSON line.
+            let mut cb = StreamJsonCallback;
+            let _result = agent.send_message(text, &mut cb).await?;
+            // Final summary line.
+            let done = serde_json::json!({
+                "type": "done",
+                "cost": {
+                    "input_tokens": agent.cost().total_input_tokens,
+                    "output_tokens": agent.cost().total_output_tokens,
+                    "total_usd": agent.cost().estimated_cost_usd(),
+                },
+            });
+            println!("{}", serde_json::to_string(&done)?);
+        }
+        _ => {
+            // text: plain output, no TUI.
+            let mut cb = PipeCallback;
+            let _result = agent.send_message(text, &mut cb).await?;
+            println!();
+        }
+    }
+    Ok(())
+}
+
+/// Callback for pipe mode: just print text to stdout.
+struct PipeCallback;
+
+impl ccx_core::AgentCallback for PipeCallback {
+    fn on_text(&mut self, text: &str) {
+        print!("{text}");
+        std::io::stdout().flush().ok();
+    }
+}
+
+/// Callback for stream-json output: emit each event as a JSON line.
+struct StreamJsonCallback;
+
+impl ccx_core::AgentCallback for StreamJsonCallback {
+    fn on_text(&mut self, text: &str) {
+        let j = serde_json::json!({"type": "text", "text": text});
+        println!("{}", serde_json::to_string(&j).unwrap_or_default());
+    }
+    fn on_tool_start(&mut self, name: &str, input: &serde_json::Value) {
+        let j = serde_json::json!({"type": "tool_start", "name": name, "input": input});
+        println!("{}", serde_json::to_string(&j).unwrap_or_default());
+    }
+    fn on_tool_end(&mut self, name: &str, result: &Result<ccx_core::ToolResult, ccx_core::ToolError>) {
+        let (success, content) = match result {
+            Ok(r) => (!r.is_error, r.content.clone()),
+            Err(e) => (false, e.to_string()),
+        };
+        let j = serde_json::json!({"type": "tool_end", "name": name, "success": success, "content": content});
+        println!("{}", serde_json::to_string(&j).unwrap_or_default());
+    }
+    fn on_thinking(&mut self, text: &str) {
+        let j = serde_json::json!({"type": "thinking", "text": text});
+        println!("{}", serde_json::to_string(&j).unwrap_or_default());
+    }
 }
 
 /// Run the full TUI with welcome screen, chat, and streaming.
@@ -702,6 +957,16 @@ impl ccx_core::AgentCallback for InlineCallback {
     }
 }
 
+/// Map short model name to full model ID.
+fn resolve_model_name(name: &str) -> &str {
+    match name.trim().to_lowercase().as_str() {
+        "sonnet" => "claude-sonnet-4-6",
+        "opus" => "claude-opus-4-6",
+        "haiku" => "claude-haiku-4-5",
+        _ => name.trim(),
+    }
+}
+
 /// Run inline interactive mode (default — no full-screen).
 async fn run_inline_mode(
     agent: &mut ccx_core::AgentLoop,
@@ -714,10 +979,13 @@ async fn run_inline_mode(
     show_thinking: bool,
     resume_id: Option<&str>,
     continue_session: bool,
+    effort: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let tool_count = tool_names.len();
-    ccx_tui::inline::render_welcome(model, auth_source, cwd_display, tool_count, email);
-    ccx_tui::inline::render_footer_line(model);
+    let mut current_model = model.to_string();
+    let current_effort = effort.to_string();
+    ccx_tui::inline::render_welcome(&current_model, auth_source, cwd_display, tool_count, email);
+    ccx_tui::inline::render_footer_line_with_effort(&current_model, &current_effort);
     println!();
 
     // Set up rustyline with tab completion, hints, and skill discovery.
@@ -857,7 +1125,14 @@ async fn run_inline_mode(
                             true
                         }
                         "/model" => {
-                            println!("Model: {model}");
+                            if let Some(new_model) = cmd_args {
+                                let resolved = resolve_model_name(new_model);
+                                agent.set_model(resolved);
+                                current_model = resolved.to_string();
+                                println!("\x1b[32mModel changed to {}\x1b[0m", resolved);
+                            } else {
+                                println!("Model: {current_model}");
+                            }
                             true
                         }
                         "/compact" => {
@@ -1192,7 +1467,7 @@ async fn run_inline_mode(
                 let _ = sessions::save_session_meta(&sessions::SessionMeta {
                     id: session_id.clone(),
                     cwd: cwd_str.clone(),
-                    model: model.to_string(),
+                    model: current_model.clone(),
                     created: session_created,
                     last_active: sessions::now_epoch(),
                     preview: first_preview.clone(),
@@ -1231,7 +1506,7 @@ async fn run_inline_mode(
     // Save history for next session.
     let _ = rl.save_history(&history_path);
 
-    ccx_tui::inline::render_footer(model);
+    ccx_tui::inline::render_footer_with_effort(&current_model, &current_effort);
     println!("\nGoodbye!");
     eprintln!("\n{}", agent.cost().summary());
     Ok(())

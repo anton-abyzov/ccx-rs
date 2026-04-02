@@ -51,6 +51,11 @@ impl OpenAiClient {
         &self.model
     }
 
+    /// Change the model at runtime.
+    pub fn set_model(&mut self, model: &str) {
+        self.model = model.to_string();
+    }
+
     /// Send a streaming message request, converting from Anthropic format internally.
     pub async fn stream_message(
         &self,

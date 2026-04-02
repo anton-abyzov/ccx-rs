@@ -56,6 +56,8 @@ pub struct AgentLoop {
     cost: CostTracker,
     retry_config: RetryConfig,
     thinking: Option<ThinkingConfig>,
+    max_tokens: u32,
+    max_budget_usd: Option<f64>,
 }
 
 /// Callback for streaming events.
@@ -84,6 +86,8 @@ pub enum AgentLoopError {
     MaxTurnsExceeded(usize),
     #[error("rate limited after {0} retries")]
     RateLimitExhausted(u32),
+    #[error("budget limit reached (${0:.2} / ${1:.2}). Use --max-budget-usd to increase.")]
+    BudgetExceeded(f64, f64),
 }
 
 impl AgentLoop {
@@ -103,6 +107,8 @@ impl AgentLoop {
             cost: CostTracker::new(),
             retry_config: RetryConfig::default(),
             thinking: None,
+            max_tokens: 16384,
+            max_budget_usd: None,
         }
     }
 
@@ -116,6 +122,31 @@ impl AgentLoop {
 
     pub fn set_thinking(&mut self, config: ThinkingConfig) {
         self.thinking = Some(config);
+    }
+
+    pub fn set_max_tokens(&mut self, tokens: u32) {
+        self.max_tokens = tokens;
+    }
+
+    pub fn set_max_budget_usd(&mut self, budget: f64) {
+        self.max_budget_usd = Some(budget);
+    }
+
+    pub fn model(&self) -> &str {
+        self.client.model()
+    }
+
+    pub fn set_model(&mut self, model: &str) {
+        self.client.set_model(model);
+    }
+
+    pub fn set_system_prompt(&mut self, prompt: String) {
+        self.system_prompt = prompt;
+    }
+
+    pub fn append_system_prompt(&mut self, text: &str) {
+        self.system_prompt.push_str("\n\n");
+        self.system_prompt.push_str(text);
     }
 
     pub fn messages(&self) -> &[InputMessage] {
@@ -247,9 +278,18 @@ impl AgentLoop {
             // Auto-compact if conversation is approaching context limits.
             self.maybe_compact();
 
+            // Check budget before each API call.
+            if let Some(budget) = self.max_budget_usd {
+                let current = self.cost.estimated_cost_usd();
+                if current >= budget {
+                    warn!("Budget limit reached: ${:.2} / ${:.2}", current, budget);
+                    return Err(AgentLoopError::BudgetExceeded(current, budget));
+                }
+            }
+
             let req = MessageRequest {
                 model: String::new(),
-                max_tokens: if self.thinking.is_some() { 32768 } else { 16384 },
+                max_tokens: self.max_tokens,
                 messages: self.messages.clone(),
                 system: Some(self.system_prompt.clone()),
                 temperature: None,
