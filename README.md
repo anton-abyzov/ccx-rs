@@ -1,10 +1,12 @@
-# ccx-rs
+# CCX-RS — Code Companion eXtended
 
 [![Release](https://img.shields.io/github/v/release/anton-abyzov/ccx-rs?style=flat-square)](https://github.com/anton-abyzov/ccx-rs/releases)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue?style=flat-square)](LICENSE)
 [![Tests](https://img.shields.io/badge/tests-280%20passing-brightgreen?style=flat-square)]()
 
-**Free, open-source AI coding assistant.** 4.7MB binary. 19 tools. Works with Claude, DeepSeek, Nemotron — or any model via OpenRouter. No subscription required.
+**The power of a 512K-line AI coding assistant in a 4.7MB binary.** Free, open-source, multi-model. Built from clean-room architecture analysis of the most advanced AI coding tool ever shipped. 19 tools, parallel execution, session persistence — works with Claude, DeepSeek, Nemotron, or any of 200+ models via OpenRouter. No subscription required.
+
+> **CCX** = **C**ode **C**ompanion e**X**tended — your AI coding companion, extended beyond any single vendor or subscription.
 
 ![CCX-RS Terminal UI](assets/screenshot.png)
 
