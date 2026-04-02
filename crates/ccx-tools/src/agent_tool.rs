@@ -111,18 +111,26 @@ async fn run_process_agent(
 ) -> Result<ToolResult, ToolError> {
     let ccx_bin = find_ccx_binary()?;
 
-    let api_key = std::env::var("ANTHROPIC_API_KEY")
-        .map_err(|_| ToolError::Execution("ANTHROPIC_API_KEY not set".into()))?;
+    let api_key = resolve_api_key(ctx)?;
+    let provider = &ctx.provider;
 
     let model = opts
         .model_override
         .clone()
+        .or_else(|| {
+            if !ctx.model.is_empty() {
+                Some(ctx.model.clone())
+            } else {
+                None
+            }
+        })
         .or_else(|| std::env::var("CCX_MODEL").ok())
         .unwrap_or_else(|| "claude-sonnet-4-6".into());
 
     // If background mode and tmux is available, spawn in a new pane.
     if run_in_background && std::env::var("TMUX").is_ok() {
-        return spawn_tmux_agent(&ccx_bin, prompt, &api_key, &model, ctx, description).await;
+        return spawn_tmux_agent(&ccx_bin, prompt, &api_key, &model, provider, ctx, description)
+            .await;
     }
 
     // Background mode without tmux: spawn async and return agent ID.
@@ -135,23 +143,23 @@ async fn run_process_agent(
         let prompt = prompt.to_string();
         let model = model.clone();
         let api_key = api_key.clone();
+        let provider = provider.clone();
         let working_dir = ctx.working_dir.clone();
 
         tokio::spawn(async move {
-            let _ = tokio::process::Command::new(&ccx_bin)
-                .arg("chat")
+            let mut cmd = tokio::process::Command::new(&ccx_bin);
+            cmd.arg("chat")
                 .arg("--prompt")
                 .arg(&prompt)
                 .arg("--dangerously-skip-permissions")
                 .arg("--model")
                 .arg(&model)
-                .env("ANTHROPIC_API_KEY", &api_key)
                 .current_dir(&working_dir)
                 .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .output()
-                .await;
+                .stderr(std::process::Stdio::piped());
+            apply_provider_env(&mut cmd, &provider, &api_key);
+            let _ = cmd.output().await;
         });
 
         return Ok(ToolResult {
@@ -161,18 +169,20 @@ async fn run_process_agent(
     }
 
     // Foreground: spawn process, capture output.
-    let output = tokio::process::Command::new(&ccx_bin)
-        .arg("chat")
+    let mut cmd = tokio::process::Command::new(&ccx_bin);
+    cmd.arg("chat")
         .arg("--prompt")
         .arg(prompt)
         .arg("--dangerously-skip-permissions")
         .arg("--model")
         .arg(&model)
-        .env("ANTHROPIC_API_KEY", &api_key)
         .current_dir(&ctx.working_dir)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    apply_provider_env(&mut cmd, provider, &api_key);
+
+    let output = cmd
         .output()
         .await
         .map_err(|e| ToolError::Execution(format!("failed to spawn ccx process: {e}")))?;
@@ -207,18 +217,28 @@ async fn spawn_tmux_agent(
     prompt: &str,
     api_key: &str,
     model: &str,
+    provider: &str,
     ctx: &ToolContext,
     description: &str,
 ) -> Result<ToolResult, ToolError> {
     // Escape single quotes in prompt for shell.
     let escaped_prompt = prompt.replace('\'', "'\\''");
+    let escaped_key = api_key.replace('\'', "'\\''");
+    let (env_var, provider_args) = match provider {
+        "openrouter" => (
+            format!("OPENROUTER_API_KEY='{escaped_key}'"),
+            format!(" --provider openrouter"),
+        ),
+        _ => (format!("ANTHROPIC_API_KEY='{escaped_key}'"), String::new()),
+    };
     let cmd = format!(
-        "cd '{}' && ANTHROPIC_API_KEY='{}' '{}' chat --prompt '{}' --dangerously-skip-permissions --model '{}'",
+        "cd '{}' && {} '{}' chat --prompt '{}' --dangerously-skip-permissions --model '{}'{}",
         ctx.working_dir.display(),
-        api_key.replace('\'', "'\\''"),
+        env_var,
         ccx_bin,
         escaped_prompt,
-        model
+        model,
+        provider_args
     );
 
     let status = tokio::process::Command::new("tmux")
@@ -274,16 +294,27 @@ async fn run_inprocess_agent(
     ctx: &ToolContext,
     opts: &AgentOpts,
 ) -> Result<ToolResult, ToolError> {
-    let api_key = std::env::var("ANTHROPIC_API_KEY")
-        .map_err(|_| ToolError::Execution("ANTHROPIC_API_KEY not set".into()))?;
+    let api_key = resolve_api_key(ctx)?;
 
     let model = opts
         .model_override
         .clone()
+        .or_else(|| {
+            if !ctx.model.is_empty() {
+                Some(ctx.model.clone())
+            } else {
+                None
+            }
+        })
         .or_else(|| std::env::var("CCX_MODEL").ok())
         .unwrap_or_else(|| "claude-sonnet-4-6".into());
 
-    let client = ccx_api::ApiClient::Claude(ccx_api::ClaudeClient::new(&api_key, &model));
+    let client = match ctx.provider.as_str() {
+        "openrouter" => {
+            ccx_api::ApiClient::OpenAi(ccx_api::OpenAiClient::openrouter(&api_key, &model))
+        }
+        _ => ccx_api::ApiClient::Claude(ccx_api::ClaudeClient::new(&api_key, &model)),
+    };
 
     // Sub-agent gets a broad tool set.
     let mut registry = ccx_core::ToolRegistry::new();
@@ -316,6 +347,34 @@ async fn run_inprocess_agent(
             is_error: true,
         }),
     }
+}
+
+/// Resolve the API key from ToolContext or environment, respecting the provider.
+fn resolve_api_key(ctx: &ToolContext) -> Result<String, ToolError> {
+    // Prefer key from context (set by parent session).
+    if !ctx.api_key.is_empty() {
+        return Ok(ctx.api_key.clone());
+    }
+    // Fall back to environment variables based on provider.
+    match ctx.provider.as_str() {
+        "openrouter" => std::env::var("OPENROUTER_API_KEY")
+            .map_err(|_| ToolError::Execution("OPENROUTER_API_KEY not set".into())),
+        _ => std::env::var("ANTHROPIC_API_KEY")
+            .map_err(|_| ToolError::Execution("ANTHROPIC_API_KEY not set".into())),
+    }
+}
+
+/// Set the correct env var and provider flag on a Command based on provider.
+fn apply_provider_env(cmd: &mut tokio::process::Command, provider: &str, api_key: &str) {
+    match provider {
+        "openrouter" => {
+            cmd.env("OPENROUTER_API_KEY", api_key);
+            cmd.arg("--provider").arg("openrouter");
+        }
+        _ => {
+            cmd.env("ANTHROPIC_API_KEY", api_key);
+        }
+    };
 }
 
 #[cfg(test)]
@@ -361,9 +420,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_agent_tool_no_api_key() {
-        // Remove the API key for this test.
+        // Remove both API keys for this test.
         let had_key = std::env::var("ANTHROPIC_API_KEY").ok();
-        unsafe { std::env::remove_var("ANTHROPIC_API_KEY") };
+        let had_or_key = std::env::var("OPENROUTER_API_KEY").ok();
+        unsafe {
+            std::env::remove_var("ANTHROPIC_API_KEY");
+            std::env::remove_var("OPENROUTER_API_KEY");
+        }
 
         let tool = AgentTool;
         let result = tool
@@ -373,13 +436,41 @@ mod tests {
             )
             .await;
 
-        // Restore key if it was set.
+        // Restore keys if they were set.
         if let Some(key) = had_key {
             unsafe { std::env::set_var("ANTHROPIC_API_KEY", key) };
+        }
+        if let Some(key) = had_or_key {
+            unsafe { std::env::set_var("OPENROUTER_API_KEY", key) };
         }
 
         // Should fail (process-based fails without key, in-process also fails).
         let err = result.unwrap_err();
         assert!(matches!(err, ToolError::Execution(_)));
+    }
+
+    #[test]
+    fn test_resolve_api_key_from_context() {
+        let mut ctx = test_ctx();
+        ctx.provider = "openrouter".to_string();
+        ctx.api_key = "test-key-123".to_string();
+        let key = resolve_api_key(&ctx).unwrap();
+        assert_eq!(key, "test-key-123");
+    }
+
+    #[test]
+    fn test_resolve_api_key_anthropic_fallback() {
+        let had_key = std::env::var("ANTHROPIC_API_KEY").ok();
+        unsafe { std::env::set_var("ANTHROPIC_API_KEY", "env-key-456") };
+
+        let ctx = test_ctx(); // provider defaults to "anthropic", api_key empty
+        let key = resolve_api_key(&ctx).unwrap();
+        assert_eq!(key, "env-key-456");
+
+        if let Some(k) = had_key {
+            unsafe { std::env::set_var("ANTHROPIC_API_KEY", k) };
+        } else {
+            unsafe { std::env::remove_var("ANTHROPIC_API_KEY") };
+        }
     }
 }

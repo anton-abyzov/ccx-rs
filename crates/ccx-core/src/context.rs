@@ -13,6 +13,19 @@ pub struct ToolContext {
     /// Extra environment variables to set for child processes.
     #[serde(default)]
     pub env_vars: HashMap<String, String>,
+    /// API provider: "anthropic" or "openrouter".
+    #[serde(default = "default_provider")]
+    pub provider: String,
+    /// API key for the current provider.
+    #[serde(default)]
+    pub api_key: String,
+    /// Model name for the current session.
+    #[serde(default)]
+    pub model: String,
+}
+
+fn default_provider() -> String {
+    "anthropic".to_string()
 }
 
 impl ToolContext {
@@ -21,6 +34,9 @@ impl ToolContext {
             working_dir,
             sandboxed: false,
             env_vars: HashMap::new(),
+            provider: "anthropic".to_string(),
+            api_key: String::new(),
+            model: String::new(),
         }
     }
 

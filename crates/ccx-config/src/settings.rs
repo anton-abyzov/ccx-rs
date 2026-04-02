@@ -1,9 +1,20 @@
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
 use ccx_permission::PermissionSettings;
+
+/// A single hook definition from settings.json.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HookDef {
+    /// Glob pattern to match tool names (e.g. "*", "Bash*").
+    #[serde(default)]
+    pub matcher: Option<String>,
+    /// Shell command to execute.
+    pub command: String,
+}
 
 /// User settings loaded from ~/.claude/settings.json.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -14,6 +25,9 @@ pub struct Settings {
     pub model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
+    /// Hooks keyed by event name: PreToolUse, PostToolUse, etc.
+    #[serde(default)]
+    pub hooks: HashMap<String, Vec<HookDef>>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -48,6 +62,31 @@ pub fn default_settings_path() -> Option<PathBuf> {
     std::env::var_os("HOME")
         .map(PathBuf::from)
         .map(|h| h.join(".claude").join("settings.json"))
+}
+
+/// Load project-level settings from `<cwd>/.claude/settings.json`.
+pub fn load_project_settings(cwd: &Path) -> Result<Settings, SettingsError> {
+    let path = cwd.join(".claude").join("settings.json");
+    load_settings(&path)
+}
+
+/// Merge two Settings, with `overlay` taking precedence for non-default fields.
+/// Hooks from both sources are combined (not replaced).
+pub fn merge_settings(base: Settings, overlay: Settings) -> Settings {
+    let mut merged_hooks = base.hooks;
+    for (event, defs) in overlay.hooks {
+        merged_hooks.entry(event).or_default().extend(defs);
+    }
+    Settings {
+        permissions: if overlay.permissions.mode.is_some() {
+            overlay.permissions
+        } else {
+            base.permissions
+        },
+        model: overlay.model.or(base.model),
+        max_tokens: overlay.max_tokens.or(base.max_tokens),
+        hooks: merged_hooks,
+    }
 }
 
 #[cfg(test)]
@@ -91,6 +130,7 @@ mod tests {
             },
             model: Some("test".into()),
             max_tokens: Some(4096),
+            hooks: HashMap::new(),
         };
         let json = serde_json::to_string(&settings).unwrap();
         let parsed: Settings = serde_json::from_str(&json).unwrap();

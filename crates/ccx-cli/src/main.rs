@@ -295,6 +295,28 @@ fn print_info() {
 }
 
 /// Map effort level to (max_tokens, thinking_enabled, thinking_budget).
+/// Convert hook definitions from settings.json into a ccx_core HookRegistry.
+fn build_hook_registry(settings: &ccx_config::Settings) -> ccx_core::HookRegistry {
+    let mut registry = ccx_core::HookRegistry::new();
+    for (event_name, defs) in &settings.hooks {
+        let event = match event_name.as_str() {
+            "PreToolUse" => ccx_core::HookEvent::PreTool,
+            "PostToolUse" => ccx_core::HookEvent::PostTool,
+            "UserPromptSubmit" | "PreMessage" => ccx_core::HookEvent::PreMessage,
+            "PostMessage" => ccx_core::HookEvent::PostMessage,
+            _ => continue,
+        };
+        for def in defs {
+            registry.add(ccx_core::Hook {
+                event,
+                pattern: def.matcher.clone(),
+                command: def.command.clone(),
+            });
+        }
+    }
+    registry
+}
+
 fn effort_config(effort: &str) -> (u32, bool, u32) {
     match effort {
         "low" => (1024, false, 0),
@@ -354,63 +376,76 @@ async fn run_chat(
     max_budget_usd: Option<f64>,
     print_mode: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Resolve client based on provider.
+    // Resolve client based on provider. Also capture the resolved key and effective provider
+    // so the Agent tool can pass them to sub-agents.
     let or_key_env = std::env::var("OPENROUTER_API_KEY").ok();
 
-    let (client, auth_source, email, no_auth): (ccx_api::ApiClient, String, Option<String>, bool) =
-        match provider {
-            "openrouter" => {
-                let key = openrouter_key.or(or_key_env.as_deref()).ok_or(
-                    "OpenRouter API key required: set OPENROUTER_API_KEY or use --openrouter-key",
-                )?;
-                let client =
-                    ccx_api::ApiClient::OpenAi(ccx_api::OpenAiClient::openrouter(key, model));
-                (client, "OpenRouter".to_string(), None, false)
-            }
-            _ => {
-                match ccx_auth::resolve_auth(explicit_key) {
-                    Ok(auth) => {
-                        let email = if let Some(token) = auth.oauth_token() {
-                            ccx_auth::fetch_oauth_email(token).await
-                        } else {
-                            None
-                        };
-                        let client = ccx_api::ApiClient::Claude(
-                            ccx_api::ClaudeClient::with_auth(&auth, model),
-                        );
-                        let auth_source = auth.display_label().to_string();
-                        (client, auth_source, email, false)
-                    }
-                    Err(_) => {
-                        // Before giving up, check if OpenRouter key is available.
-                        if let Some(ref or_key) = or_key_env {
-                            if !or_key.is_empty() {
-                                let client = ccx_api::ApiClient::OpenAi(
-                                    ccx_api::OpenAiClient::openrouter(or_key, model),
-                                );
-                                (
-                                    client,
-                                    "OpenRouter (auto-detected)".to_string(),
-                                    None,
-                                    false,
-                                )
-                            } else {
-                                // No credentials at all — show guide.
-                                print_auth_guide(print_mode);
-                                if print_mode {
-                                    std::process::exit(1);
-                                }
-                                let auth = ccx_auth::AuthMethod::None;
-                                let client = ccx_api::ApiClient::Claude(
-                                    ccx_api::ClaudeClient::with_auth(&auth, model),
-                                );
-                                (
-                                    client,
-                                    auth.display_label().to_string(),
-                                    None,
-                                    true,
-                                )
-                            }
+    let (client, auth_source, email, no_auth, resolved_api_key, effective_provider): (
+        ccx_api::ApiClient,
+        String,
+        Option<String>,
+        bool,
+        String,
+        String,
+    ) = match provider {
+        "openrouter" => {
+            let key = openrouter_key.or(or_key_env.as_deref()).ok_or(
+                "OpenRouter API key required: set OPENROUTER_API_KEY or use --openrouter-key",
+            )?;
+            let client =
+                ccx_api::ApiClient::OpenAi(ccx_api::OpenAiClient::openrouter(key, model));
+            (
+                client,
+                "OpenRouter".to_string(),
+                None,
+                false,
+                key.to_string(),
+                "openrouter".to_string(),
+            )
+        }
+        _ => {
+            match ccx_auth::resolve_auth(explicit_key) {
+                Ok(auth) => {
+                    let email = if let Some(token) = auth.oauth_token() {
+                        ccx_auth::fetch_oauth_email(token).await
+                    } else {
+                        None
+                    };
+                    let resolved_key = match &auth {
+                        ccx_auth::AuthMethod::ApiKey(r) => r.key.clone(),
+                        ccx_auth::AuthMethod::OAuthToken { access_token, .. } => {
+                            access_token.clone()
+                        }
+                        ccx_auth::AuthMethod::None => String::new(),
+                    };
+                    let client = ccx_api::ApiClient::Claude(
+                        ccx_api::ClaudeClient::with_auth(&auth, model),
+                    );
+                    let auth_source = auth.display_label().to_string();
+                    (
+                        client,
+                        auth_source,
+                        email,
+                        false,
+                        resolved_key,
+                        "anthropic".to_string(),
+                    )
+                }
+                Err(_) => {
+                    // Before giving up, check if OpenRouter key is available.
+                    if let Some(ref or_key) = or_key_env {
+                        if !or_key.is_empty() {
+                            let client = ccx_api::ApiClient::OpenAi(
+                                ccx_api::OpenAiClient::openrouter(or_key, model),
+                            );
+                            (
+                                client,
+                                "OpenRouter (auto-detected)".to_string(),
+                                None,
+                                false,
+                                or_key.clone(),
+                                "openrouter".to_string(),
+                            )
                         } else {
                             // No credentials at all — show guide.
                             print_auth_guide(print_mode);
@@ -421,15 +456,45 @@ async fn run_chat(
                             let client = ccx_api::ApiClient::Claude(
                                 ccx_api::ClaudeClient::with_auth(&auth, model),
                             );
-                            (client, auth.display_label().to_string(), None, true)
+                            (
+                                client,
+                                auth.display_label().to_string(),
+                                None,
+                                true,
+                                String::new(),
+                                "anthropic".to_string(),
+                            )
                         }
+                    } else {
+                        // No credentials at all — show guide.
+                        print_auth_guide(print_mode);
+                        if print_mode {
+                            std::process::exit(1);
+                        }
+                        let auth = ccx_auth::AuthMethod::None;
+                        let client = ccx_api::ApiClient::Claude(
+                            ccx_api::ClaudeClient::with_auth(&auth, model),
+                        );
+                        (
+                            client,
+                            auth.display_label().to_string(),
+                            None,
+                            true,
+                            String::new(),
+                            "anthropic".to_string(),
+                        )
                     }
                 }
             }
-        };
+        }
+    };
 
-    // Load settings.
-    let settings = ccx_config::load_default_settings().unwrap_or_default();
+    // Load settings from both global (~/.claude/settings.json) and project-local
+    // (.claude/settings.json), merging hooks from both sources.
+    let global_settings = ccx_config::load_default_settings().unwrap_or_default();
+    let cwd_early = std::env::current_dir()?;
+    let project_settings = ccx_config::load_project_settings(&cwd_early).unwrap_or_default();
+    let settings = ccx_config::merge_settings(global_settings, project_settings);
 
     // Resolve permission mode.
     let mode = match permission_mode {
@@ -524,9 +589,17 @@ async fn run_chat(
     if sandbox {
         ctx.sandboxed = true;
     }
+    // Pass provider, key, and model so sub-agents (Agent tool) inherit credentials.
+    ctx.provider = effective_provider.clone();
+    ctx.api_key = resolved_api_key;
+    ctx.model = model.to_string();
+
+    // Build HookRegistry from merged settings.
+    let hook_registry = build_hook_registry(&settings);
 
     let mut agent = ccx_core::AgentLoop::new(client, registry, ctx, system_prompt);
     agent.set_max_turns(max_turns);
+    agent.set_hook_registry(hook_registry);
 
     // GAP 2: effort level controls max_tokens and thinking.
     let (effort_tokens, effort_thinking, effort_budget) = effort_config(effort);

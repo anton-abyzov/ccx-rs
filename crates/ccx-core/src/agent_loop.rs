@@ -7,6 +7,7 @@ use log::{debug, error, trace, warn};
 
 use crate::context::ToolContext;
 use crate::cost::CostTracker;
+use crate::hooks::{HookEvent, HookRegistry, run_hook};
 use crate::tool::{ToolError, ToolRegistry, ToolResult};
 
 /// Tracks a content block being streamed.
@@ -58,6 +59,7 @@ pub struct AgentLoop {
     thinking: Option<ThinkingConfig>,
     max_tokens: u32,
     max_budget_usd: Option<f64>,
+    hook_registry: HookRegistry,
 }
 
 /// Callback for streaming events.
@@ -109,6 +111,7 @@ impl AgentLoop {
             thinking: None,
             max_tokens: 16384,
             max_budget_usd: None,
+            hook_registry: HookRegistry::new(),
         }
     }
 
@@ -130,6 +133,10 @@ impl AgentLoop {
 
     pub fn set_max_budget_usd(&mut self, budget: f64) {
         self.max_budget_usd = Some(budget);
+    }
+
+    pub fn set_hook_registry(&mut self, registry: HookRegistry) {
+        self.hook_registry = registry;
     }
 
     pub fn model(&self) -> &str {
@@ -357,7 +364,7 @@ impl AgentLoop {
             // Execute tool calls in parallel if the model requested them.
             if stop_reason == Some(StopReason::ToolUse) && !tool_calls.is_empty() {
                 debug!("Executing {} tool calls", tool_calls.len());
-                // Phase 1: Check permissions sequentially (may prompt user).
+                // Phase 1: Check permissions and fire PreTool hooks.
                 let mut approved = Vec::new();
                 let mut results = Vec::new();
                 for (id, name, input) in tool_calls {
@@ -370,6 +377,31 @@ impl AgentLoop {
                         });
                         continue;
                     }
+
+                    // Fire PreTool hooks.
+                    let pre_hooks =
+                        self.hook_registry.matching(HookEvent::PreTool, Some(&name));
+                    for hook in &pre_hooks {
+                        debug!("Running PreTool hook for {}: {}", name, hook.command);
+                        match run_hook(hook, &self.context.working_dir).await {
+                            Ok(result) => {
+                                if !result.stdout.is_empty() {
+                                    debug!("PreTool hook stdout: {}", result.stdout.trim());
+                                }
+                                if !result.success {
+                                    warn!(
+                                        "PreTool hook failed for {}: {}",
+                                        name,
+                                        result.stderr.trim()
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                warn!("PreTool hook error for {}: {}", name, e);
+                            }
+                        }
+                    }
+
                     debug!("Tool permission granted: {}", name);
                     callback.on_tool_start(&name, &input);
                     approved.push((id, name, input));
@@ -384,8 +416,32 @@ impl AgentLoop {
                     .collect();
                 let exec_results = futures::future::join_all(futures).await;
 
-                // Phase 3: Collect results and fire callbacks.
+                // Phase 3: Collect results, fire PostTool hooks, and fire callbacks.
                 for ((id, name, _), result) in approved.into_iter().zip(exec_results) {
+                    // Fire PostTool hooks.
+                    let post_hooks =
+                        self.hook_registry.matching(HookEvent::PostTool, Some(&name));
+                    for hook in &post_hooks {
+                        debug!("Running PostTool hook for {}: {}", name, hook.command);
+                        match run_hook(hook, &self.context.working_dir).await {
+                            Ok(hr) => {
+                                if !hr.stdout.is_empty() {
+                                    debug!("PostTool hook stdout: {}", hr.stdout.trim());
+                                }
+                                if !hr.success {
+                                    warn!(
+                                        "PostTool hook failed for {}: {}",
+                                        name,
+                                        hr.stderr.trim()
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                warn!("PostTool hook error for {}: {}", name, e);
+                            }
+                        }
+                    }
+
                     callback.on_tool_end(&name, &result);
                     let (tool_content, is_error) = match result {
                         Ok(r) => (r.content, r.is_error),
