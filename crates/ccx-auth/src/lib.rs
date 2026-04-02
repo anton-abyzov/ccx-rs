@@ -45,6 +45,7 @@ pub enum AuthMethod {
     /// OAuth token from Claude Code subscription (Max, Pro, Team).
     OAuthToken {
         access_token: String,
+        api_key: Option<String>,
         subscription_type: String,
     },
     /// Not authenticated yet — user needs to /login or set an API key.
@@ -242,16 +243,30 @@ fn read_credentials_file() -> Option<AuthMethod> {
 /// Parse Claude Code OAuth JSON and return an AuthMethod if valid and not expired.
 fn parse_oauth_json(json: &str) -> Option<AuthMethod> {
     let v: serde_json::Value = serde_json::from_str(json).ok()?;
-    let oauth = v.get("claudeAiOauth")?;
-    let access_token = oauth.get("accessToken")?.as_str()?.to_string();
+    let oauth = v.get("claudeAiOauth").or_else(|| v.get("claudeAiOAuth"));
+    let access_token = oauth
+        .and_then(|value| value.get("accessToken"))
+        .or_else(|| v.get("accessToken"))?
+        .as_str()?
+        .to_string();
+    let api_key = oauth
+        .and_then(|value| value.get("apiKey"))
+        .or_else(|| v.get("apiKey"))
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string());
     let subscription_type = oauth
-        .get("subscriptionType")
+        .and_then(|value| value.get("subscriptionType"))
         .and_then(|s| s.as_str())
         .unwrap_or("unknown")
         .to_string();
 
     // Check if token is expired.
-    if let Some(expires) = oauth.get("expiresAt").and_then(|e| e.as_i64()) {
+    if let Some(expires) = oauth
+        .and_then(|value| value.get("expiresAt"))
+        .or_else(|| v.get("expiresAt"))
+        .and_then(|value| value.as_i64())
+    {
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as i64)
@@ -266,6 +281,7 @@ fn parse_oauth_json(json: &str) -> Option<AuthMethod> {
     }
     Some(AuthMethod::OAuthToken {
         access_token,
+        api_key,
         subscription_type,
     })
 }
@@ -387,10 +403,7 @@ pub fn save_ccx_credential(provider: &str, key: &str) -> Result<(), Box<dyn std:
 }
 
 /// Validate an API key by making a lightweight test call. Returns Ok(()) if valid.
-pub async fn validate_api_key(
-    provider: &str,
-    key: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn validate_api_key(provider: &str, key: &str) -> Result<(), Box<dyn std::error::Error>> {
     let client = reqwest::Client::new();
     match provider {
         "anthropic" => {
@@ -436,6 +449,12 @@ pub async fn validate_api_key(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
 
     #[test]
     fn test_explicit_key_takes_priority() {
@@ -446,7 +465,7 @@ mod tests {
 
     #[test]
     fn test_env_var_resolution() {
-        // SAFETY: test is single-threaded, env var is restored after use.
+        let _guard = env_lock().lock().unwrap();
         unsafe { std::env::set_var("ANTHROPIC_API_KEY", "sk-env-key") };
         let result = resolve_api_key(None).unwrap();
         assert_eq!(result.key, "sk-env-key");
@@ -456,6 +475,7 @@ mod tests {
 
     #[test]
     fn test_no_key_found() {
+        let _guard = env_lock().lock().unwrap();
         unsafe { std::env::remove_var("ANTHROPIC_API_KEY") };
         let result = resolve_api_key(None);
         assert!(result.is_ok() || matches!(result, Err(AuthError::NoKeyFound)));
@@ -463,10 +483,37 @@ mod tests {
 
     #[test]
     fn test_explicit_overrides_env() {
+        let _guard = env_lock().lock().unwrap();
         unsafe { std::env::set_var("ANTHROPIC_API_KEY", "sk-env-key") };
         let result = resolve_api_key(Some("sk-explicit")).unwrap();
         assert_eq!(result.key, "sk-explicit");
         assert_eq!(result.source, KeySource::Explicit);
         unsafe { std::env::remove_var("ANTHROPIC_API_KEY") };
+    }
+
+    #[test]
+    fn test_parse_oauth_json_accepts_alt_casing_and_api_key() {
+        let json = r#"{
+            "claudeAiOAuth": {
+                "accessToken": "oauth-token",
+                "apiKey": "sk-ant-oauth-derived",
+                "subscriptionType": "max",
+                "expiresAt": 4102444800000
+            }
+        }"#;
+
+        let parsed = parse_oauth_json(json);
+        match parsed {
+            Some(AuthMethod::OAuthToken {
+                access_token,
+                api_key,
+                subscription_type,
+            }) => {
+                assert_eq!(access_token, "oauth-token");
+                assert_eq!(api_key.as_deref(), Some("sk-ant-oauth-derived"));
+                assert_eq!(subscription_type, "max");
+            }
+            _ => panic!("expected OAuthToken"),
+        }
     }
 }

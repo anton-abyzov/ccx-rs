@@ -38,12 +38,24 @@ impl ClaudeClient {
                 use_oauth: false,
                 model: model.into(),
             },
-            ccx_auth::AuthMethod::OAuthToken { access_token, .. } => Self {
-                http: reqwest::Client::new(),
-                api_key: access_token.clone(),
-                use_oauth: true,
-                model: model.into(),
-            },
+            ccx_auth::AuthMethod::OAuthToken {
+                access_token,
+                api_key,
+                ..
+            } => {
+                let (credential, use_oauth) = if let Some(api_key) = api_key {
+                    (api_key.clone(), false)
+                } else {
+                    (access_token.clone(), true)
+                };
+
+                Self {
+                    http: reqwest::Client::new(),
+                    api_key: credential,
+                    use_oauth,
+                    model: model.into(),
+                }
+            }
             ccx_auth::AuthMethod::None => Self {
                 http: reqwest::Client::new(),
                 api_key: String::new(),

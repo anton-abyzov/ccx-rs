@@ -21,11 +21,15 @@ curl -fsSL https://raw.githubusercontent.com/anton-abyzov/ccx-rs/main/install.sh
 > **No curl?** Use wget: `wget -qO- https://raw.githubusercontent.com/anton-abyzov/ccx-rs/main/install.sh | sh`
 > Or install curl first: `apt install curl` (Linux) / `brew install curl` (macOS)
 
+The installer reuses your current writable `ccx` location when possible. If it has to install into a user bin directory, it writes a managed PATH block into your shell profile and prints the one-line command for the current shell too.
+
 ### Windows (PowerShell)
 
 ```powershell
 irm https://raw.githubusercontent.com/anton-abyzov/ccx-rs/main/install.ps1 | iex
 ```
+
+The PowerShell installer prepends the install directory in both the current session and your persisted user `Path`, so a freshly updated `ccx.exe` wins over older copies.
 
 <details>
 <summary>Other install methods</summary>
@@ -47,6 +51,14 @@ cd ccx-rs && cargo build --release
 # macOS/Linux: sudo cp target/release/ccx /usr/local/bin/
 # Windows: copy target\release\ccx.exe %USERPROFILE%\.ccx\bin\
 ```
+
+### Upgrading
+
+```bash
+ccx update
+```
+
+You do not need to uninstall first. If `which -a ccx` shows multiple copies, CCX will now try to update the active writable one in place. When it has to fall back to a user bin directory, it updates your shell profile so the newer binary wins in new shells.
 
 </details>
 

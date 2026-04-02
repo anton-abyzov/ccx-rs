@@ -4,7 +4,85 @@ set -e
 # CCX Installer — downloads the latest release binary for your platform
 
 REPO="anton-abyzov/ccx-rs"
-INSTALL_DIR="${CCX_INSTALL_DIR:-$HOME/.ccx/bin}"
+CCX_PATH_BLOCK_START="# >>> ccx path >>>"
+CCX_PATH_BLOCK_END="# <<< ccx path <<<"
+
+path_contains_dir() {
+  case ":$PATH:" in
+    *":$1:"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+choose_install_dir() {
+  if [ -n "$CCX_INSTALL_DIR" ]; then
+    printf '%s\n' "$CCX_INSTALL_DIR"
+    return
+  fi
+
+  if command -v ccx >/dev/null 2>&1; then
+    existing="$(command -v ccx)"
+    existing_dir="$(dirname "$existing")"
+    if [ -w "$existing_dir" ]; then
+      printf '%s\n' "$existing_dir"
+      return
+    fi
+  fi
+
+  for candidate in "$HOME/.local/bin" "$HOME/bin"; do
+    if path_contains_dir "$candidate"; then
+      printf '%s\n' "$candidate"
+      return
+    fi
+  done
+
+  printf '%s\n' "$HOME/.ccx/bin"
+}
+
+shell_profile_path() {
+  case "${SHELL:-}" in
+    */fish)
+      printf '%s\n' "$HOME/.config/fish/config.fish"
+      ;;
+    */zsh)
+      printf '%s\n' "$HOME/.zshrc"
+      ;;
+    */bash)
+      printf '%s\n' "$HOME/.bashrc"
+      ;;
+    *)
+      printf '%s\n' "$HOME/.profile"
+      ;;
+  esac
+}
+
+ensure_path_block() {
+  profile="$(shell_profile_path)"
+  mkdir -p "$(dirname "$profile")"
+  [ -f "$profile" ] || : > "$profile"
+
+  if grep -q "$CCX_PATH_BLOCK_START" "$profile" 2>/dev/null; then
+    return 0
+  fi
+
+  {
+    printf '\n%s\n' "$CCX_PATH_BLOCK_START"
+    case "${SHELL:-}" in
+      */fish)
+        printf 'set -gx PATH "%s" $PATH\n' "$INSTALL_DIR"
+        ;;
+      *)
+        printf 'export PATH="%s:$PATH"\n' "$INSTALL_DIR"
+        ;;
+    esac
+    printf '%s\n' "$CCX_PATH_BLOCK_END"
+  } >> "$profile"
+
+  PROFILE_UPDATED="$profile"
+}
+
+INSTALL_DIR="$(choose_install_dir)"
+PROFILE_UPDATED=""
 
 # Detect OS and architecture
 OS="$(uname -s)"
@@ -21,6 +99,7 @@ case "$OS" in
   Linux)
     case "$ARCH" in
       x86_64|amd64) ARTIFACT="ccx-linux-x64" ;;
+      arm64|aarch64) ARTIFACT="ccx-linux-arm64" ;;
       *) echo "Unsupported architecture: $ARCH"; exit 1 ;;
     esac
     ;;
@@ -53,26 +132,29 @@ chmod +x "$TMP"
 mkdir -p "$INSTALL_DIR"
 mv "$TMP" "$INSTALL_DIR/ccx"
 
-# Add to PATH if not already there
-if ! echo "$PATH" | grep -q "$INSTALL_DIR"; then
-  echo ""
-  echo "Add CCX to your PATH (add to ~/.zshrc or ~/.bashrc):"
-  echo ""
-  echo "  export PATH=\"$INSTALL_DIR:\$PATH\""
-  echo ""
-  # Try to add automatically
-  for rc in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.profile"; do
-    if [ -f "$rc" ] && ! grep -q "$INSTALL_DIR" "$rc"; then
-      echo "export PATH=\"$INSTALL_DIR:\$PATH\"" >> "$rc"
-      echo "Added to $rc"
-      break
-    fi
-  done
+if ! path_contains_dir "$INSTALL_DIR"; then
+  ensure_path_block
 fi
 
 echo ""
 echo "✓ CCX installed to $INSTALL_DIR/ccx"
+if [ -n "$PROFILE_UPDATED" ]; then
+  echo "✓ Updated shell profile: $PROFILE_UPDATED"
+fi
 echo ""
+if ! path_contains_dir "$INSTALL_DIR"; then
+  echo "Run in this shell:"
+  case "${SHELL:-}" in
+    */fish)
+      echo "  set -gx PATH \"$INSTALL_DIR\" \$PATH"
+      ;;
+    *)
+      echo "  export PATH=\"$INSTALL_DIR:\$PATH\""
+      echo "  hash -r"
+      ;;
+  esac
+  echo ""
+fi
 echo "Get started:"
 echo "  # Free (OpenRouter — no subscription needed):"
 echo "  export OPENROUTER_API_KEY=\"your-key-from-openrouter.ai/keys\""

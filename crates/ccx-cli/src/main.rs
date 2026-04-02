@@ -591,6 +591,155 @@ fn mask_key(key: &str) -> String {
     }
 }
 
+const CCX_PATH_BLOCK_START: &str = "# >>> ccx path >>>";
+const CCX_PATH_BLOCK_END: &str = "# <<< ccx path <<<";
+
+fn ccx_binary_name() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "ccx.exe"
+    } else {
+        "ccx"
+    }
+}
+
+fn path_contains_dir(path_env: &std::ffi::OsStr, dir: &std::path::Path) -> bool {
+    std::env::split_paths(path_env).any(|entry| entry == dir)
+}
+
+fn preferred_user_bin_dir() -> std::path::PathBuf {
+    let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+    for candidate in [home.join(".local/bin"), home.join("bin")] {
+        if path_contains_dir(
+            &std::env::var_os("PATH").unwrap_or_default(),
+            &candidate,
+        ) {
+            return candidate;
+        }
+    }
+    home.join(".ccx/bin")
+}
+
+fn shell_profile_target() -> Option<(std::path::PathBuf, bool)> {
+    let home = dirs::home_dir()?;
+    let shell = std::env::var("SHELL").unwrap_or_default();
+    if shell.contains("fish") {
+        Some((home.join(".config/fish/config.fish"), true))
+    } else if shell.contains("zsh") {
+        Some((home.join(".zshrc"), false))
+    } else if shell.contains("bash") {
+        Some((home.join(".bashrc"), false))
+    } else {
+        Some((home.join(".profile"), false))
+    }
+}
+
+fn render_path_block(install_dir: &std::path::Path, fish_syntax: bool) -> String {
+    if fish_syntax {
+        format!(
+            "\n{CCX_PATH_BLOCK_START}\nset -gx PATH \"{}\" $PATH\n{CCX_PATH_BLOCK_END}\n",
+            install_dir.display()
+        )
+    } else {
+        format!(
+            "\n{CCX_PATH_BLOCK_START}\nexport PATH=\"{}:$PATH\"\n{CCX_PATH_BLOCK_END}\n",
+            install_dir.display()
+        )
+    }
+}
+
+fn compare_versions(left: &str, right: &str) -> std::cmp::Ordering {
+    let parse = |value: &str| {
+        value
+            .split('.')
+            .map(|part| part.parse::<u64>().unwrap_or(0))
+            .collect::<Vec<_>>()
+    };
+
+    let mut left_parts = parse(left);
+    let mut right_parts = parse(right);
+    let max_len = left_parts.len().max(right_parts.len());
+    left_parts.resize(max_len, 0);
+    right_parts.resize(max_len, 0);
+    left_parts.cmp(&right_parts)
+}
+
+fn ensure_path_block(install_dir: &std::path::Path) -> Result<Option<std::path::PathBuf>, String> {
+    let Some((profile_path, fish_syntax)) = shell_profile_target() else {
+        return Ok(None);
+    };
+
+    if let Some(parent) = profile_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("failed to create profile dir {}: {e}", parent.display()))?;
+    }
+
+    let existing = std::fs::read_to_string(&profile_path).unwrap_or_default();
+    let block = render_path_block(install_dir, fish_syntax);
+    let updated = if let Some(start) = existing.find(CCX_PATH_BLOCK_START) {
+        if let Some(end_rel) = existing[start..].find(CCX_PATH_BLOCK_END) {
+            let end = start + end_rel + CCX_PATH_BLOCK_END.len();
+            let mut replaced = String::new();
+            replaced.push_str(&existing[..start]);
+            replaced.push_str(&block);
+            replaced.push_str(&existing[end..]);
+            replaced
+        } else {
+            format!("{existing}{block}")
+        }
+    } else {
+        format!("{existing}{block}")
+    };
+
+    if updated != existing {
+        std::fs::write(&profile_path, updated)
+            .map_err(|e| format!("failed to update {}: {e}", profile_path.display()))?;
+    }
+
+    Ok(Some(profile_path))
+}
+
+fn is_dir_writable(dir: &std::path::Path) -> bool {
+    if std::fs::create_dir_all(dir).is_err() {
+        return false;
+    }
+    let probe = dir.join(format!(".ccx-write-test-{}", std::process::id()));
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&probe)
+    {
+        Ok(_) => {
+            let _ = std::fs::remove_file(probe);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+fn install_downloaded_binary(
+    downloaded_path: &std::path::Path,
+    install_path: &std::path::Path,
+) -> Result<(), String> {
+    if let Some(parent) = install_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("failed to create {}: {e}", parent.display()))?;
+    }
+    std::fs::copy(downloaded_path, install_path)
+        .map_err(|e| format!("failed to copy to {}: {e}", install_path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(install_path)
+            .map_err(|e| format!("failed to read permissions for {}: {e}", install_path.display()))?
+            .permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(install_path, perms)
+            .map_err(|e| format!("failed to chmod {}: {e}", install_path.display()))?;
+    }
+    let _ = std::fs::remove_file(downloaded_path);
+    Ok(())
+}
+
 fn run_update() {
     println!("Checking for updates...");
 
@@ -616,9 +765,16 @@ fn run_update() {
                 let latest = tag.trim_start_matches('v');
                 println!("Latest version:  v{latest}");
 
-                if latest == current_version {
-                    println!("\n\x1b[32m✓ Already up to date!\x1b[0m");
-                } else {
+                match compare_versions(latest, current_version) {
+                    std::cmp::Ordering::Equal => {
+                        println!("\n\x1b[32m✓ Already up to date!\x1b[0m");
+                    }
+                    std::cmp::Ordering::Less => {
+                        println!(
+                            "\n\x1b[32m✓ Already on a newer local version (v{current_version}) than the latest release.\x1b[0m"
+                        );
+                    }
+                    std::cmp::Ordering::Greater => {
                     println!("\nUpdating to v{latest}...");
 
                     let artifact = if cfg!(target_os = "macos") && cfg!(target_arch = "aarch64") {
@@ -639,87 +795,80 @@ fn run_update() {
                     let url = format!(
                         "https://github.com/anton-abyzov/ccx-rs/releases/download/{tag}/{artifact}"
                     );
-                    let tmp = "/tmp/ccx-update";
+                    let tmp = std::env::temp_dir().join(format!(
+                        "ccx-update-{}{}",
+                        std::process::id(),
+                        if cfg!(target_os = "windows") { ".exe" } else { "" }
+                    ));
+                    let tmp_str = tmp.to_string_lossy().to_string();
 
                     let dl = std::process::Command::new("curl")
-                        .args(["-fsSL", &url, "-o", tmp])
-                        .status();
+                        .args(["-fsSL", &url, "-o", &tmp_str])
+                        .status()
+                        .or_else(|_| {
+                            std::process::Command::new("wget")
+                                .args(["-q", &url, "-O", &tmp_str])
+                                .status()
+                        });
 
                     match dl {
                         Ok(s) if s.success() => {
-                            #[cfg(unix)]
-                            {
-                                std::process::Command::new("chmod")
-                                    .args(["+x", tmp])
-                                    .status()
-                                    .ok();
-                            }
-
-                            let current_exe = std::env::current_exe().unwrap_or_default();
-                            let install_path = current_exe.to_string_lossy().to_string();
-
-                            // Try to install in-place first (works if binary is in user-writable dir)
-                            // If binary is in /usr/local/bin (needs sudo), try user dir first
-                            let (final_path, success) = if install_path.starts_with("/usr/")
-                                || install_path.starts_with("/opt/")
-                                || install_path.starts_with("/System/")
-                            {
-                                // System path — try user dir first to avoid sudo
-                                let user_dir = dirs::home_dir()
-                                    .map(|h| h.join(".ccx/bin"))
-                                    .unwrap_or_else(|| std::path::PathBuf::from("/usr/local/bin"));
-                                let user_path = user_dir.join("ccx");
-
-                                // Create user bin dir
-                                std::fs::create_dir_all(&user_dir).ok();
-
-                                let mv_ok = std::process::Command::new("mv")
-                                    .args([tmp, &user_path.to_string_lossy()])
-                                    .status()
-                                    .map(|s| s.success())
-                                    .unwrap_or(false);
-
-                                if mv_ok {
-                                    // Check if user_dir is in PATH
-                                    let path_env = std::env::var("PATH").unwrap_or_default();
-                                    if !path_env.contains(&user_dir.to_string_lossy().to_string()) {
-                                        println!(
-                                            "\n\x1b[38;2;138;99;210mAdd to your shell profile:\x1b[0m"
-                                        );
-                                        println!(
-                                            "  export PATH=\"{}:$PATH\"",
-                                            user_dir.display()
-                                        );
-                                    }
-                                    (user_path.to_string_lossy().to_string(), true)
+                            let current_exe =
+                                std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::new());
+                            let current_dir = current_exe.parent().map(std::path::Path::to_path_buf);
+                            let install_target = if cfg!(target_os = "windows") {
+                                preferred_user_bin_dir().join(ccx_binary_name())
+                            } else if let Some(dir) = &current_dir {
+                                if is_dir_writable(dir) {
+                                    current_exe.clone()
                                 } else {
-                                    // Fallback to sudo for original location
-                                    println!("Installing to {install_path} (requires sudo)...");
-                                    let sudo_ok = std::process::Command::new("sudo")
-                                        .args(["mv", tmp, &install_path])
-                                        .status()
-                                        .map(|s| s.success())
-                                        .unwrap_or(false);
-                                    (install_path.clone(), sudo_ok)
+                                    preferred_user_bin_dir().join(ccx_binary_name())
                                 }
                             } else {
-                                // User-writable path — direct mv
-                                println!("Installing to {install_path}...");
-                                let ok = std::process::Command::new("mv")
-                                    .args([tmp, &install_path])
-                                    .status()
-                                    .map(|s| s.success())
-                                    .unwrap_or(false);
-                                (install_path.clone(), ok)
+                                preferred_user_bin_dir().join(ccx_binary_name())
                             };
 
-                            if success {
+                            let install_result = install_downloaded_binary(&tmp, &install_target);
+
+                            if install_result.is_ok() {
+                                let install_dir = install_target
+                                    .parent()
+                                    .map(std::path::Path::to_path_buf)
+                                    .unwrap_or_else(preferred_user_bin_dir);
+                                let install_moved = current_dir.as_ref() != Some(&install_dir);
+                                let path_env = std::env::var_os("PATH").unwrap_or_default();
+
+                                if install_moved {
+                                    match ensure_path_block(&install_dir) {
+                                        Ok(Some(profile)) => {
+                                            println!(
+                                                "\n\x1b[38;2;138;99;210mUpdated shell profile:\x1b[0m {}",
+                                                profile.display()
+                                            );
+                                        }
+                                        Ok(None) => {}
+                                        Err(err) => {
+                                            eprintln!("\x1b[33mWarning:\x1b[0m {err}");
+                                        }
+                                    }
+                                }
+
                                 println!("\n\x1b[32m✓ Updated to v{latest}!\x1b[0m");
-                                println!("  Installed at: {final_path}");
+                                println!("  Installed at: {}", install_target.display());
+
+                                if install_moved
+                                    || !path_contains_dir(&path_env, &install_dir)
+                                {
+                                    println!("\n\x1b[38;2;138;99;210mRun in this shell:\x1b[0m");
+                                    if cfg!(target_os = "windows") {
+                                        println!("  $env:Path=\"{};\" + $env:Path", install_dir.display());
+                                    } else {
+                                        println!("  export PATH=\"{}:$PATH\"", install_dir.display());
+                                        println!("  hash -r");
+                                    }
+                                }
                             } else {
-                                eprintln!(
-                                    "Failed to install. Try: sudo mv {tmp} {install_path}"
-                                );
+                                eprintln!("{}", install_result.err().unwrap_or_default());
                             }
                         }
                         _ => {
@@ -727,6 +876,7 @@ fn run_update() {
                                 "Download failed. Try manually: curl -fsSL {url} -o ccx && chmod +x ccx"
                             );
                         }
+                    }
                     }
                 }
             } else {
@@ -1075,7 +1225,11 @@ async fn run_first_run_auth(
                     }
                     let auth = ccx_auth::AuthMethod::OAuthToken {
                         access_token: tokens.access_token.clone(),
-                        subscription_type: "unknown".to_string(),
+                        api_key: tokens.api_key.clone(),
+                        subscription_type: tokens
+                            .subscription_type
+                            .clone()
+                            .unwrap_or_else(|| "unknown".to_string()),
                     };
                     let client = ccx_api::ApiClient::Claude(
                         ccx_api::ClaudeClient::with_auth(&auth, model),
@@ -1211,6 +1365,40 @@ async fn run_first_run_auth(
     }
 }
 
+async fn hydrate_runtime_oauth(auth: ccx_auth::AuthMethod) -> ccx_auth::AuthMethod {
+    match auth {
+        ccx_auth::AuthMethod::OAuthToken {
+            access_token,
+            api_key: None,
+            subscription_type,
+        } => match ccx_auth::oauth::derive_cli_api_key(&access_token).await {
+            Ok(api_key) => {
+                let subscription_type = if subscription_type == "unknown" {
+                    ccx_auth::oauth::resolve_subscription_type(&access_token)
+                        .await
+                        .unwrap_or(subscription_type)
+                } else {
+                    subscription_type
+                };
+                ccx_auth::AuthMethod::OAuthToken {
+                    access_token,
+                    api_key: Some(api_key),
+                    subscription_type,
+                }
+            }
+            Err(err) => {
+                log::debug!("Failed to derive CLI API key from OAuth token: {err}");
+                ccx_auth::AuthMethod::OAuthToken {
+                    access_token,
+                    api_key: None,
+                    subscription_type,
+                }
+            }
+        },
+        other => other,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_chat(
     model: &str,
@@ -1284,6 +1472,7 @@ async fn run_chat(
         _ => {
             match ccx_auth::resolve_auth(explicit_key) {
                 Ok(auth) => {
+                    let auth = hydrate_runtime_oauth(auth).await;
                     let email = if let Some(token) = auth.oauth_token() {
                         ccx_auth::fetch_oauth_email(token).await
                     } else {
@@ -1291,9 +1480,11 @@ async fn run_chat(
                     };
                     let resolved_key = match &auth {
                         ccx_auth::AuthMethod::ApiKey(r) => r.key.clone(),
-                        ccx_auth::AuthMethod::OAuthToken { access_token, .. } => {
-                            access_token.clone()
-                        }
+                        ccx_auth::AuthMethod::OAuthToken {
+                            access_token,
+                            api_key,
+                            ..
+                        } => api_key.clone().unwrap_or_else(|| access_token.clone()),
                         ccx_auth::AuthMethod::None => String::new(),
                     };
                     let client = ccx_api::ApiClient::Claude(
@@ -2307,9 +2498,6 @@ async fn run_inline_mode(
                             true
                         }
                         "/login" => {
-                            // Delegate to `claude auth login` if available (handles the full
-                            // interactive OAuth flow with React/Ink UI). Falls back to our
-                            // paste-code flow if claude CLI is not installed.
                             let claude_available = std::process::Command::new("claude")
                                 .arg("--version")
                                 .output()
@@ -2323,8 +2511,10 @@ async fn run_inline_mode(
                                     .status();
                                 match status {
                                     Ok(s) if s.success() => Ok(ccx_auth::oauth::OAuthTokens {
-                                        access_token: String::new(), // will be read from keychain
+                                        access_token: String::new(),
                                         refresh_token: None,
+                                        api_key: None,
+                                        subscription_type: None,
                                     }),
                                     Ok(_) => Err("Claude auth failed".into()),
                                     Err(e) => Err(Box::new(e) as Box<dyn std::error::Error>),
@@ -2338,23 +2528,51 @@ async fn run_inline_mode(
                                     println!(
                                         "\x1b[32mLogin successful!\x1b[0m Restart ccx to use your subscription."
                                     );
-                                    if no_auth {
-                                        // Re-check auth after login.
-                                        if let Ok(auth) = ccx_auth::resolve_auth(None)
-                                            && !auth.is_none() {
-                                                no_auth = false;
-                                                let new_client = ccx_api::ApiClient::Claude(
-                                                    ccx_api::ClaudeClient::with_auth(
-                                                        &auth,
-                                                        agent.model(),
-                                                    ),
-                                                );
-                                                agent.set_client(new_client);
-                                                println!(
-                                                    "\x1b[32mAuthenticated as {}. You can start chatting.\x1b[0m",
-                                                    auth.display_label()
-                                                );
+                                    // Re-check auth after login.
+                                    if let Ok(auth) = ccx_auth::resolve_auth(None) {
+                                        let mut auth = hydrate_runtime_oauth(auth).await;
+                                        let needs_scope_refresh = matches!(
+                                            &auth,
+                                            ccx_auth::AuthMethod::OAuthToken { api_key: None, .. }
+                                        );
+
+                                        if needs_scope_refresh {
+                                            println!(
+                                                "\x1b[90mRefreshing OAuth session for CCX...\x1b[0m"
+                                            );
+                                            match ccx_auth::oauth::login().await {
+                                                Ok(tokens) => {
+                                                    auth = ccx_auth::AuthMethod::OAuthToken {
+                                                        access_token: tokens.access_token.clone(),
+                                                        api_key: tokens.api_key.clone(),
+                                                        subscription_type: tokens
+                                                            .subscription_type
+                                                            .clone()
+                                                            .unwrap_or_else(|| "unknown".to_string()),
+                                                    };
+                                                }
+                                                Err(e) => {
+                                                    println!(
+                                                        "\x1b[31mCCX OAuth refresh failed: {e}\x1b[0m"
+                                                    );
+                                                }
                                             }
+                                        }
+
+                                        if !auth.is_none() {
+                                            no_auth = false;
+                                            let new_client = ccx_api::ApiClient::Claude(
+                                                ccx_api::ClaudeClient::with_auth(
+                                                    &auth,
+                                                    agent.model(),
+                                                ),
+                                            );
+                                            agent.set_client(new_client);
+                                            println!(
+                                                "\x1b[32mAuthenticated as {}. You can start chatting.\x1b[0m",
+                                                auth.display_label()
+                                            );
+                                        }
                                     }
                                 }
                                 Err(e) => println!("\x1b[31mLogin failed: {e}\x1b[0m"),
