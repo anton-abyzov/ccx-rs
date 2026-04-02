@@ -8,7 +8,10 @@ pub struct ClaudeMdFile {
     pub content: String,
 }
 
-/// Discover CLAUDE.md files by walking from the given directory up to root.
+/// Names to check for project instruction files, in priority order.
+const INSTRUCTION_FILE_NAMES: &[&str] = &["CLAUDE.md", "CCX.md", "AGENTS.md"];
+
+/// Discover CLAUDE.md / CCX.md / AGENTS.md files by walking from the given directory up to root.
 /// Also checks ~/.claude/CLAUDE.md for the global config.
 /// Returns files ordered: global first, project-specific last.
 pub fn discover_claude_md(start_dir: &Path) -> Vec<ClaudeMdFile> {
@@ -16,14 +19,18 @@ pub fn discover_claude_md(start_dir: &Path) -> Vec<ClaudeMdFile> {
     let mut current = Some(start_dir.to_path_buf());
 
     while let Some(dir) = current {
-        let candidate = dir.join("CLAUDE.md");
-        if candidate.is_file()
-            && let Ok(content) = fs::read_to_string(&candidate)
-        {
-            files.push(ClaudeMdFile {
-                path: candidate,
-                content,
-            });
+        for name in INSTRUCTION_FILE_NAMES {
+            let candidate = dir.join(name);
+            if candidate.is_file()
+                && !files.iter().any(|f: &ClaudeMdFile| f.path == candidate)
+                && let Ok(content) = fs::read_to_string(&candidate)
+            {
+                files.push(ClaudeMdFile {
+                    path: candidate,
+                    content,
+                });
+                break; // Only pick the first match per directory
+            }
         }
         current = dir.parent().map(|p| p.to_path_buf());
     }

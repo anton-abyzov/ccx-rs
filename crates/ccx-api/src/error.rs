@@ -6,7 +6,10 @@ pub enum Error {
     #[error("authentication failed: {0}")]
     Auth(String),
 
-    #[error("rate limited (retry after {retry_after_secs:?}s)")]
+    #[error("rate limited{}", match retry_after_secs {
+        Some(s) => format!(" (retry after {s}s)"),
+        None => String::new(),
+    })]
     RateLimit { retry_after_secs: Option<u64> },
 
     #[error("API error ({status}): {body}")]

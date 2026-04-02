@@ -12,6 +12,7 @@ pub struct WelcomeInfo {
     pub email: Option<String>,
     pub cwd: String,
     pub tool_count: usize,
+    pub provider: String,
 }
 
 impl Default for WelcomeInfo {
@@ -22,6 +23,7 @@ impl Default for WelcomeInfo {
             email: None,
             cwd: "~/".into(),
             tool_count: 11,
+            provider: "anthropic".into(),
         }
     }
 }
@@ -33,7 +35,7 @@ pub fn render_welcome(frame: &mut Frame, area: Rect, info: &WelcomeInfo) {
         Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)]).split(area);
 
     render_left_panel(frame, panels[0], info);
-    render_right_panel(frame, panels[1]);
+    render_right_panel(frame, panels[1], &info.provider);
 }
 
 fn render_left_panel(frame: &mut Frame, area: Rect, info: &WelcomeInfo) {
@@ -101,7 +103,7 @@ fn render_left_panel(frame: &mut Frame, area: Rect, info: &WelcomeInfo) {
     frame.render_widget(paragraph, inner);
 }
 
-fn render_right_panel(frame: &mut Frame, area: Rect) {
+fn render_right_panel(frame: &mut Frame, area: Rect, provider: &str) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Theme::border());
@@ -109,6 +111,7 @@ fn render_right_panel(frame: &mut Frame, area: Rect) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
+    let init_file = if provider == "anthropic" { "CLAUDE.md" } else { "CCX.md" };
     let sep_width = inner.width.saturating_sub(2) as usize;
     let lines = vec![
         Line::from(""),
@@ -121,7 +124,7 @@ fn render_right_panel(frame: &mut Frame, area: Rect) {
             Theme::panel_body(),
         )),
         Line::from(Span::styled(
-            " Run /init to create a CLAUDE.md",
+            format!(" Run /init to create a {init_file}"),
             Theme::panel_body(),
         )),
         Line::from(Span::styled(

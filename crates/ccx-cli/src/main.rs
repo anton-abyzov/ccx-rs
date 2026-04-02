@@ -869,6 +869,7 @@ async fn run_chat(
                 &cwd_display,
                 tool_count,
                 email.as_deref(),
+                &effective_provider,
             )
             .await?;
         } else {
@@ -1015,6 +1016,7 @@ async fn run_tui_mode(
     cwd_display: &str,
     tool_count: usize,
     email: Option<&str>,
+    provider: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (tui_tx, tui_rx) = mpsc::channel::<ccx_tui::TuiEvent>();
     let (input_tx, input_rx) = mpsc::channel::<ccx_tui::TuiInput>();
@@ -1025,6 +1027,7 @@ async fn run_tui_mode(
         email: email.map(|s| s.to_string()),
         cwd: cwd_display.to_string(),
         tool_count,
+        provider: provider.to_string(),
     };
 
     // Spawn TUI thread (blocking — owns the terminal).
@@ -1217,19 +1220,21 @@ struct InlineCallback {
     always_allow: HashSet<String>,
     bypass_permissions: bool,
     auth_source: String,
+    email: Option<String>,
     retry_count: u32,
     show_thinking: bool,
     thinking_active: bool,
 }
 
 impl InlineCallback {
-    fn new(bypass_permissions: bool, auth_source: &str, show_thinking: bool) -> Self {
+    fn new(bypass_permissions: bool, auth_source: &str, show_thinking: bool, email: Option<&str>) -> Self {
         Self {
             text_buffer: String::new(),
             spinner_shown: false,
             always_allow: HashSet::new(),
             bypass_permissions,
             auth_source: auth_source.to_string(),
+            email: email.map(|s| s.to_string()),
             retry_count: 0,
             show_thinking,
             thinking_active: false,
@@ -1301,21 +1306,33 @@ impl ccx_core::AgentCallback for InlineCallback {
         }
     }
 
-    fn on_retry(&mut self, _attempt: u32, delay_ms: u64, _reason: &str) {
+    fn on_retry(&mut self, attempt: u32, delay_ms: u64, _reason: &str) {
         self.finish_text();
         self.retry_count += 1;
-        let label = if self.auth_source.starts_with("Claude") {
-            format!("{} daily limit", self.auth_source)
+        let account = if let Some(ref email) = self.email {
+            format!("{} -- {}", self.auth_source, email)
         } else {
-            "rate limited".to_string()
+            self.auth_source.clone()
         };
+        let hint = if self.auth_source.starts_with("Claude") {
+            "Daily limit may be reached. "
+        } else {
+            ""
+        };
+        let delay_secs = delay_ms as f64 / 1000.0;
         ccx_tui::inline::render_error(&format!(
-            "Rate limited ({label}). Retrying in {:.1}s...",
-            delay_ms as f64 / 1000.0
+            "Rate limited ({account})"
+        ));
+        ccx_tui::inline::render_error(&format!(
+            "  {hint}Retrying in {delay_secs:.0}s... (attempt {attempt}/5)"
         ));
         if self.retry_count >= 3 {
+            println!();
             ccx_tui::inline::render_error(
-                "Try: --provider openrouter --model deepseek/deepseek-r1-0528:free",
+                "  Tip: Use a free model instead:",
+            );
+            ccx_tui::inline::render_error(
+                "    ccx --provider openrouter --model \"nvidia/nemotron-3-super-120b-a12b:free\"",
             );
         }
     }
@@ -1370,7 +1387,7 @@ async fn run_inline_mode(
     let tool_count = tool_names.len();
     let mut current_model = model.to_string();
     let current_effort = effort.to_string();
-    ccx_tui::inline::render_welcome(&current_model, auth_source, cwd_display, tool_count, email);
+    ccx_tui::inline::render_welcome_with_provider(&current_model, auth_source, cwd_display, tool_count, email, effective_provider);
     ccx_tui::inline::render_footer_line_with_effort(&current_model, &current_effort);
     println!();
 
@@ -1553,18 +1570,27 @@ async fn run_inline_mode(
                             true
                         }
                         "/init" => {
-                            let claude_md_path = cwd.join("CLAUDE.md");
-                            if claude_md_path.exists() {
+                            let filename = if effective_provider == "anthropic" {
+                                "CLAUDE.md"
+                            } else {
+                                "CCX.md"
+                            };
+                            // Check if any instruction file already exists.
+                            let existing = ["CLAUDE.md", "CCX.md", "AGENTS.md"]
+                                .iter()
+                                .find(|name| cwd.join(name).exists());
+                            if let Some(found) = existing {
                                 println!(
-                                    "\x1b[33mCLAUDE.md already exists in this directory.\x1b[0m"
+                                    "\x1b[33m{found} already exists in this directory.\x1b[0m"
                                 );
                             } else {
                                 let template =
                                     "# Project Instructions\n\nDescribe your project here.\n";
-                                match std::fs::write(&claude_md_path, template) {
-                                    Ok(_) => println!("\x1b[32mCreated CLAUDE.md\x1b[0m"),
+                                let path = cwd.join(filename);
+                                match std::fs::write(&path, template) {
+                                    Ok(_) => println!("\x1b[32mCreated {filename}\x1b[0m"),
                                     Err(e) => {
-                                        println!("\x1b[31mFailed to create CLAUDE.md: {e}\x1b[0m")
+                                        println!("\x1b[31mFailed to create {filename}: {e}\x1b[0m")
                                     }
                                 }
                             }
@@ -1722,12 +1748,15 @@ async fn run_inline_mode(
                                 );
                             }
 
-                            // Check CLAUDE.md.
-                            if cwd.join("CLAUDE.md").exists() {
-                                println!("  \x1b[32m✓\x1b[0m CLAUDE.md: found");
+                            // Check instruction file (CLAUDE.md, CCX.md, AGENTS.md).
+                            if let Some(found) = ["CLAUDE.md", "CCX.md", "AGENTS.md"]
+                                .iter()
+                                .find(|name| cwd.join(name).exists())
+                            {
+                                println!("  \x1b[32m✓\x1b[0m {found}: found");
                             } else {
                                 println!(
-                                    "  \x1b[90m-\x1b[0m CLAUDE.md: not found (use /init to create)"
+                                    "  \x1b[90m-\x1b[0m Project instructions: not found (use /init to create)"
                                 );
                             }
 
@@ -1821,6 +1850,7 @@ async fn run_inline_mode(
                                     bypass_permissions,
                                     auth_source,
                                     show_thinking,
+                                    email,
                                 );
                                 match agent.send_message(&user_msg, &mut cb).await {
                                     Ok(_) => cb.finish_text(),
@@ -1854,6 +1884,7 @@ async fn run_inline_mode(
                                         bypass_permissions,
                                         auth_source,
                                         show_thinking,
+                                        email,
                                     );
                                     match agent.send_message(&user_msg, &mut cb).await {
                                         Ok(_) => cb.finish_text(),
@@ -2035,7 +2066,7 @@ async fn run_inline_mode(
                         ccx_tui::inline::render_skill_invocation(&skill.name, skill_args);
 
                         let mut cb =
-                            InlineCallback::new(bypass_permissions, auth_source, show_thinking);
+                            InlineCallback::new(bypass_permissions, auth_source, show_thinking, email);
                         match agent.send_message(&user_msg, &mut cb).await {
                             Ok(_) => cb.finish_text(),
                             Err(e) => {
@@ -2070,7 +2101,7 @@ async fn run_inline_mode(
                 ccx_tui::inline::clear_previous_line();
                 ccx_tui::inline::render_user_message(input);
 
-                let mut cb = InlineCallback::new(bypass_permissions, auth_source, show_thinking);
+                let mut cb = InlineCallback::new(bypass_permissions, auth_source, show_thinking, email);
                 match agent.send_message(input, &mut cb).await {
                     Ok(_) => cb.finish_text(),
                     Err(e) => {

@@ -61,12 +61,25 @@ fn pad_to(s: &str, target: usize) -> String {
 }
 
 /// Render the welcome panel with two-column layout.
+/// `provider` controls which instruction filename appears in tips ("CLAUDE.md" vs "CCX.md").
 pub fn render_welcome(
     model: &str,
     auth_source: &str,
     cwd: &str,
     tools: usize,
     email: Option<&str>,
+) {
+    render_welcome_with_provider(model, auth_source, cwd, tools, email, "anthropic");
+}
+
+/// Render the welcome panel with provider-aware tips.
+pub fn render_welcome_with_provider(
+    model: &str,
+    auth_source: &str,
+    cwd: &str,
+    tools: usize,
+    email: Option<&str>,
+    provider: &str,
 ) {
     let width = term_width().min(80);
 
@@ -129,13 +142,14 @@ pub fn render_welcome(
     left_lines.push(format!("  {DIM}Tools: {tools}{RESET}"));
     left_lines.push(String::new());
 
-    // Right panel content.
+    // Right panel content (provider-aware tips).
+    let init_file = if provider == "anthropic" { "CLAUDE.md" } else { "CCX.md" };
     let sep = "─".repeat(right_w.saturating_sub(2));
     let right_lines: Vec<String> = vec![
         String::new(),
         format!("{ACCENT_BOLD} Tips for getting started{RESET}"),
         " Type a message to start coding".to_string(),
-        " Run /init to create a CLAUDE.md".to_string(),
+        format!(" Run /init to create a {init_file}"),
         " Type /help for commands".to_string(),
         " Press Tab after / for autocomplete".to_string(),
         " Ctrl+C to quit".to_string(),
