@@ -8,15 +8,16 @@ use std::io::{self, Write};
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use crossterm::terminal;
 
-// ANSI escape sequences.
+// ANSI escape sequences — designed for readability on both dark and light terminals.
 const ACCENT: &str = "\x1b[38;2;138;99;210m";
 const ACCENT_BOLD: &str = "\x1b[1;38;2;138;99;210m";
 const GREEN: &str = "\x1b[38;2;80;200;120m";
-const DIM: &str = "\x1b[90m";
+const DIM: &str = "\x1b[38;2;140;140;140m"; // lighter gray — readable on dark backgrounds
 const BOLD: &str = "\x1b[1m";
 const RESET: &str = "\x1b[0m";
-const BG_GRAY: &str = "\x1b[48;2;50;50;50m";
-const RED: &str = "\x1b[31m";
+const BG_GRAY: &str = "\x1b[48;2;60;60;60m"; // slightly lighter background for user messages
+const RED: &str = "\x1b[38;2;255;100;100m"; // bright red — visible on dark
+const WHITE: &str = "\x1b[38;2;220;220;220m"; // bright white for main text
 
 /// Terminal width, defaulting to 80 if unknown.
 pub fn term_width() -> usize {
@@ -244,8 +245,38 @@ pub fn render_tool_end(success: bool, preview: &str) {
 
 /// Print streaming assistant text (no trailing newline).
 pub fn render_text(text: &str) {
-    print!("{text}");
+    print!("{WHITE}{text}{RESET}");
     io::stdout().flush().unwrap();
+}
+
+/// Render thinking/reasoning in a collapsible-style block.
+/// Shows a summary line that indicates thinking happened, with the content in dim.
+pub fn render_thinking_block(text: &str) {
+    let lines: Vec<&str> = text.lines().collect();
+    let preview = if lines.len() > 3 {
+        format!("{}... (+{} more lines)", lines[..3].join(" "), lines.len() - 3)
+    } else {
+        lines.join(" ")
+    };
+    // Dim italic with a 💭 prefix — visually distinct from response text
+    println!("\x1b[2;3m  💭 {preview}\x1b[0m");
+}
+
+/// Render streaming thinking text (dim italic, no newline).
+pub fn render_thinking_chunk(text: &str) {
+    print!("\x1b[2;3;38;2;140;140;140m{text}\x1b[0m");
+    io::stdout().flush().unwrap();
+}
+
+/// Start a thinking block (prints the 💭 prefix).
+pub fn start_thinking() {
+    print!("\x1b[2;3;38;2;140;140;140m  💭 ");
+    io::stdout().flush().unwrap();
+}
+
+/// End a thinking block.
+pub fn end_thinking() {
+    println!("\x1b[0m");
 }
 
 /// Clear the previous line (moves cursor up and erases).
