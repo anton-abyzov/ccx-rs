@@ -88,6 +88,8 @@ pub enum AgentLoopError {
     MaxTurnsExceeded(usize),
     #[error("rate limited after {0} retries")]
     RateLimitExhausted(u32),
+    #[error("rate limited — falling back to OpenRouter")]
+    RateLimitFallback,
     #[error("budget limit reached (${0:.2} / ${1:.2}). Use --max-budget-usd to increase.")]
     BudgetExceeded(f64, f64),
 }
@@ -127,6 +129,10 @@ impl AgentLoop {
         self.thinking = Some(config);
     }
 
+    pub fn clear_thinking(&mut self) {
+        self.thinking = None;
+    }
+
     pub fn set_max_tokens(&mut self, tokens: u32) {
         self.max_tokens = tokens;
     }
@@ -149,6 +155,12 @@ impl AgentLoop {
 
     pub fn set_client(&mut self, client: ApiClient) {
         self.client = client;
+    }
+
+    /// Remove the last message from conversation history.
+    /// Used to undo a pushed user message before retrying with a different provider.
+    pub fn pop_last_message(&mut self) {
+        self.messages.pop();
     }
 
     pub fn set_system_prompt(&mut self, prompt: String) {
@@ -525,7 +537,7 @@ impl AgentLoop {
                 }
                 Err(ccx_api::Error::RateLimit { retry_after_secs }) => {
                     attempt += 1;
-                    warn!(
+                    debug!(
                         "Rate limited (attempt {}/{}): retry after {}s",
                         attempt,
                         self.retry_config.max_retries,
@@ -533,8 +545,18 @@ impl AgentLoop {
                             .map(|s| s.to_string())
                             .unwrap_or_else(|| "unknown".to_string())
                     );
+
+                    // After 2 failed retries, offer fallback to OpenRouter
+                    if attempt >= 2 {
+                        if let Ok(or_key) = std::env::var("OPENROUTER_API_KEY") {
+                            if !or_key.is_empty() {
+                                return Err(AgentLoopError::RateLimitFallback);
+                            }
+                        }
+                    }
+
                     if attempt > self.retry_config.max_retries {
-                        error!("Rate limit exhausted after {} attempts", attempt);
+                        debug!("Rate limit exhausted after {} attempts", attempt);
                         return Err(AgentLoopError::RateLimitExhausted(attempt));
                     }
 
@@ -552,12 +574,22 @@ impl AgentLoop {
                 }
                 Err(ccx_api::Error::Overloaded) => {
                     attempt += 1;
-                    warn!(
+                    debug!(
                         "API overloaded (attempt {}/{}): backing off",
                         attempt, self.retry_config.max_retries
                     );
+
+                    // After 2 failed retries, offer fallback to OpenRouter
+                    if attempt >= 2 {
+                        if let Ok(or_key) = std::env::var("OPENROUTER_API_KEY") {
+                            if !or_key.is_empty() {
+                                return Err(AgentLoopError::RateLimitFallback);
+                            }
+                        }
+                    }
+
                     if attempt > self.retry_config.max_retries {
-                        error!("API overloaded after max retries");
+                        debug!("API overloaded after max retries");
                         return Err(AgentLoopError::Api(
                             "API overloaded after max retries".into(),
                         ));

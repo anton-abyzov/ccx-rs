@@ -814,27 +814,83 @@ fn effort_config(effort: &str) -> (u32, bool, u32) {
 }
 
 /// Print a friendly authentication guide when no credentials are found.
+/// In interactive mode, prompts for provider choice and runs OAuth if selected.
 fn print_auth_guide(print_mode: bool) {
+    let purple = "\x1b[38;2;138;99;210m";
+    let bold = "\x1b[1m";
+    let dim = "\x1b[90m";
+    let reset = "\x1b[0m";
+
     println!();
-    println!("\x1b[1mNo authentication found.\x1b[0m");
+    println!("{purple}╭──────────────────────────────────────────────╮{reset}");
+    println!("{purple}│{reset}                                              {purple}│{reset}");
+    println!("{purple}│{reset}  {bold}Welcome to CCX!{reset}                             {purple}│{reset}");
+    println!("{purple}│{reset}                                              {purple}│{reset}");
+    println!("{purple}│{reset}  Choose your provider:                       {purple}│{reset}");
+    println!("{purple}│{reset}                                              {purple}│{reset}");
+    println!("{purple}│{reset}  {purple}[1]{reset} {bold}Claude Max/Pro{reset} (recommended)            {purple}│{reset}");
+    println!("{purple}│{reset}      Opens browser → sign in → auto-token    {purple}│{reset}");
+    println!("{purple}│{reset}                                              {purple}│{reset}");
+    println!("{purple}│{reset}  {purple}[2]{reset} {bold}Free models{reset} (OpenRouter)                 {purple}│{reset}");
+    println!("{purple}│{reset}      Get free key at openrouter.ai/keys      {purple}│{reset}");
+    println!("{purple}│{reset}                                              {purple}│{reset}");
+    println!("{purple}│{reset}  {purple}[3]{reset} {bold}Claude API key{reset}                           {purple}│{reset}");
+    println!("{purple}│{reset}      export ANTHROPIC_API_KEY=\"sk-ant-...\"   {purple}│{reset}");
+    println!("{purple}│{reset}                                              {purple}│{reset}");
+    println!("{purple}│{reset}  {purple}[4]{reset} {bold}OpenAI (GPT-4o){reset}                          {purple}│{reset}");
+    println!("{purple}│{reset}      export OPENAI_API_KEY=\"sk-...\"          {purple}│{reset}");
+    println!("{purple}│{reset}                                              {purple}│{reset}");
+    println!("{purple}╰──────────────────────────────────────────────╯{reset}");
     println!();
-    println!("Choose how to authenticate:");
-    println!();
-    println!("  \x1b[38;2;138;99;210m1.\x1b[0m \x1b[1m/login\x1b[0m — Sign in with Claude Max/Pro subscription (opens browser)");
-    println!("     Run \x1b[1mccx\x1b[0m and type \x1b[1m/login\x1b[0m");
-    println!();
-    println!("  \x1b[38;2;138;99;210m2.\x1b[0m \x1b[1mClaude API key\x1b[0m");
-    println!("     export ANTHROPIC_API_KEY=\"sk-ant-...\"");
-    println!("     Get one at: https://console.anthropic.com/settings/keys");
-    println!();
-    println!("  \x1b[38;2;138;99;210m3.\x1b[0m \x1b[1mFree models via OpenRouter\x1b[0m (no subscription needed)");
-    println!("     export OPENROUTER_API_KEY=\"sk-or-...\"");
-    println!("     ccx --provider openrouter --model \"nvidia/nemotron-3-super-120b-a12b:free\"");
-    println!("     Get a free key at: https://openrouter.ai/keys");
-    println!();
-    if !print_mode {
-        println!("\x1b[90mStarting interactive mode — type /login to authenticate.\x1b[0m");
-        println!();
+
+    if print_mode {
+        // Non-interactive: just show the guide and exit
+        println!("{dim}Set one of the above and re-run ccx.{reset}");
+        return;
+    }
+
+    // Interactive: prompt for choice
+    print!("Enter choice (1-4): ");
+    std::io::stdout().flush().ok();
+
+    let mut choice = String::new();
+    if std::io::stdin().read_line(&mut choice).is_ok() {
+        match choice.trim() {
+            "1" => {
+                println!();
+                println!("{purple}⚡{reset} Starting browser login...");
+                // OAuth login will be handled by the interactive session (/login)
+                println!("{dim}Starting interactive mode — running /login automatically...{reset}");
+                println!();
+            }
+            "2" => {
+                println!();
+                println!("  1. Get a free key at: {bold}https://openrouter.ai/keys{reset}");
+                println!("  2. Then run:");
+                println!("     {bold}export OPENROUTER_API_KEY=\"sk-or-...\"{reset}");
+                println!("     {bold}ccx --model nemotron{reset}");
+                println!();
+            }
+            "3" => {
+                println!();
+                println!("  1. Get a key at: {bold}https://console.anthropic.com/settings/keys{reset}");
+                println!("  2. Then run:");
+                println!("     {bold}export ANTHROPIC_API_KEY=\"sk-ant-...\"{reset}");
+                println!();
+            }
+            "4" => {
+                println!();
+                println!("  1. Get a key at: {bold}https://platform.openai.com/api-keys{reset}");
+                println!("  2. Then run:");
+                println!("     {bold}export OPENAI_API_KEY=\"sk-...\"{reset}");
+                println!();
+            }
+            _ => {
+                println!();
+                println!("{dim}Starting interactive mode — type /login to authenticate.{reset}");
+                println!();
+            }
+        }
     }
 }
 
@@ -1290,10 +1346,40 @@ async fn run_single_shot(
     show_thinking: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut cb = StreamCallback::new(show_thinking);
-    let _result = agent.send_message(text, &mut cb).await?;
+    let _result = send_with_fallback(agent, text, &mut cb).await?;
     println!();
     eprintln!("\n{}", agent.cost().summary());
     Ok(())
+}
+
+/// Attempt to send a message; on RateLimitFallback, switch to OpenRouter and retry.
+async fn send_with_fallback<C: ccx_core::AgentCallback>(
+    agent: &mut ccx_core::AgentLoop,
+    text: &str,
+    cb: &mut C,
+) -> Result<String, ccx_core::AgentLoopError> {
+    match agent.send_message(text, cb).await {
+        Ok(result) => Ok(result),
+        Err(ccx_core::AgentLoopError::RateLimitFallback) => {
+            if let Ok(or_key) = std::env::var("OPENROUTER_API_KEY") {
+                let or_model = "nvidia/nemotron-3-super-120b-a12b:free";
+                agent.set_client(ccx_api::ApiClient::OpenAi(
+                    ccx_api::OpenAiClient::openrouter(&or_key, or_model),
+                ));
+                agent.set_model(or_model);
+                agent.clear_thinking(); // OpenRouter doesn't support Anthropic thinking
+                // Pop the user message that was already pushed by the failed send_message
+                agent.pop_last_message();
+                eprintln!(
+                    "\n\x1b[38;2;138;99;210m\u{26a1} Rate limited. Auto-switching to OpenRouter (nemotron)...\x1b[0m\n"
+                );
+                agent.send_message(text, cb).await
+            } else {
+                Err(ccx_core::AgentLoopError::RateLimitFallback)
+            }
+        }
+        Err(e) => Err(e),
+    }
 }
 
 /// GAP 6: Pipe mode — read prompt, print plain response, exit.
@@ -1307,7 +1393,7 @@ async fn run_pipe_mode(
         "json" => {
             // Collect full response, output as JSON.
             let mut cb = ccx_core::NoopCallback;
-            let result = agent.send_message(text, &mut cb).await?;
+            let result = send_with_fallback(agent, text, &mut cb).await?;
             let json = serde_json::json!({
                 "response": result,
                 "model": agent.model(),
@@ -1322,7 +1408,7 @@ async fn run_pipe_mode(
         "stream-json" => {
             // Stream each event as a JSON line.
             let mut cb = StreamJsonCallback;
-            let _result = agent.send_message(text, &mut cb).await?;
+            let _result = send_with_fallback(agent, text, &mut cb).await?;
             // Final summary line.
             let done = serde_json::json!({
                 "type": "done",
@@ -1337,7 +1423,7 @@ async fn run_pipe_mode(
         _ => {
             // text: plain output, no TUI.
             let mut cb = PipeCallback;
-            let _result = agent.send_message(text, &mut cb).await?;
+            let _result = send_with_fallback(agent, text, &mut cb).await?;
             println!();
         }
     }
@@ -1416,6 +1502,27 @@ async fn run_tui_mode(
 
         match agent.send_message(&user_input, &mut cb).await {
             Ok(_) => {}
+            Err(ccx_core::AgentLoopError::RateLimitFallback) => {
+                if let Ok(or_key) = std::env::var("OPENROUTER_API_KEY") {
+                    let or_model = "nvidia/nemotron-3-super-120b-a12b:free";
+                    agent.set_client(ccx_api::ApiClient::OpenAi(
+                        ccx_api::OpenAiClient::openrouter(&or_key, or_model),
+                    ));
+                    agent.set_model(or_model);
+                    agent.pop_last_message();
+                    let _ = tui_tx.send(ccx_tui::TuiEvent::NewMessage(ccx_tui::ChatMessage {
+                        role: ccx_tui::ChatRole::Tool,
+                        content: "\u{26a1} Rate limited. Auto-switching to OpenRouter (nemotron)...".into(),
+                    }));
+                    let mut cb2 = TuiCallback { tx: tui_tx.clone() };
+                    if let Err(e) = agent.send_message(&user_input, &mut cb2).await {
+                        let _ = tui_tx.send(ccx_tui::TuiEvent::NewMessage(ccx_tui::ChatMessage {
+                            role: ccx_tui::ChatRole::Error,
+                            content: format!("Error: {e}"),
+                        }));
+                    }
+                }
+            }
             Err(e) => {
                 let _ = tui_tx.send(ccx_tui::TuiEvent::NewMessage(ccx_tui::ChatMessage {
                     role: ccx_tui::ChatRole::Error,
@@ -1702,15 +1809,6 @@ impl ccx_core::AgentCallback for InlineCallback {
         ccx_tui::inline::render_error(&format!(
             "  {hint}Retrying in {delay_secs:.0}s... (attempt {attempt}/5)"
         ));
-        if self.retry_count >= 3 {
-            println!();
-            ccx_tui::inline::render_error(
-                "  Tip: Use a free model instead:",
-            );
-            ccx_tui::inline::render_error(
-                "    ccx --provider openrouter --model \"nvidia/nemotron-3-super-120b-a12b:free\"",
-            );
-        }
     }
 
     fn on_turn_complete(&mut self, _turn: usize, _cost: &ccx_core::CostTracker) {
@@ -2474,6 +2572,29 @@ async fn run_inline_mode(
                             InlineCallback::new(bypass_permissions, auth_source, show_thinking, email);
                         match agent.send_message(&user_msg, &mut cb).await {
                             Ok(_) => cb.finish_text(),
+                            Err(ccx_core::AgentLoopError::RateLimitFallback) => {
+                                cb.finish_text();
+                                let or_key = std::env::var("OPENROUTER_API_KEY").unwrap();
+                                let or_model = "nvidia/nemotron-3-super-120b-a12b:free";
+                                let or_client = ccx_api::ApiClient::OpenAi(
+                                    ccx_api::OpenAiClient::openrouter(&or_key, or_model),
+                                );
+                                agent.set_client(or_client);
+                                agent.set_model(or_model);
+                                current_model = or_model.to_string();
+                                agent.pop_last_message();
+                                println!();
+                                println!("\x1b[38;2;138;99;210m\u{26a1} Rate limited. Auto-switching to OpenRouter (nemotron)...\x1b[0m");
+                                println!();
+                                let mut cb2 = InlineCallback::new(bypass_permissions, auth_source, show_thinking, email);
+                                match agent.send_message(&user_msg, &mut cb2).await {
+                                    Ok(_) => cb2.finish_text(),
+                                    Err(e2) => {
+                                        cb2.finish_text();
+                                        ccx_tui::inline::render_error(&format!("Error: {e2}"));
+                                    }
+                                }
+                            }
                             Err(e) => {
                                 cb.finish_text();
                                 ccx_tui::inline::render_error(&format!("Error: {e}"));
@@ -2509,6 +2630,41 @@ async fn run_inline_mode(
                 let mut cb = InlineCallback::new(bypass_permissions, auth_source, show_thinking, email);
                 match agent.send_message(input, &mut cb).await {
                     Ok(_) => cb.finish_text(),
+                    Err(ccx_core::AgentLoopError::RateLimitFallback) => {
+                        cb.finish_text();
+                        let or_key = std::env::var("OPENROUTER_API_KEY").unwrap();
+                        let or_model = "nvidia/nemotron-3-super-120b-a12b:free";
+                        let or_client = ccx_api::ApiClient::OpenAi(
+                            ccx_api::OpenAiClient::openrouter(&or_key, or_model),
+                        );
+                        agent.set_client(or_client);
+                        agent.set_model(or_model);
+                        current_model = or_model.to_string();
+                        // Pop the user message pushed by the failed send_message
+                        agent.pop_last_message();
+                        println!();
+                        println!("\x1b[38;2;138;99;210m\u{26a1} Rate limited. Auto-switching to OpenRouter (nemotron)...\x1b[0m");
+                        println!();
+                        let mut cb2 = InlineCallback::new(bypass_permissions, auth_source, show_thinking, email);
+                        match agent.send_message(input, &mut cb2).await {
+                            Ok(_) => cb2.finish_text(),
+                            Err(e2) => {
+                                cb2.finish_text();
+                                ccx_tui::inline::render_error(&format!("Error: {e2}"));
+                            }
+                        }
+                    }
+                    Err(ccx_core::AgentLoopError::RateLimitExhausted(_)) => {
+                        cb.finish_text();
+                        println!();
+                        ccx_tui::inline::render_error("Rate limit reached. Options:");
+                        ccx_tui::inline::render_error("  1. Wait and retry (may take minutes)");
+                        ccx_tui::inline::render_error("  2. Use a free model:");
+                        ccx_tui::inline::render_error("     export OPENROUTER_API_KEY=\"your-key-from-openrouter.ai/keys\"");
+                        ccx_tui::inline::render_error("     ccx --model nemotron");
+                        ccx_tui::inline::render_error("  3. Use a different Claude API key:");
+                        ccx_tui::inline::render_error("     export ANTHROPIC_API_KEY=\"sk-ant-...\"");
+                    }
                     Err(e) => {
                         cb.finish_text();
                         ccx_tui::inline::render_error(&format!("Error: {e}"));
