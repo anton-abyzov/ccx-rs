@@ -2307,9 +2307,7 @@ async fn run_inline_mode(
                             true
                         }
                         "/login" => {
-                            match tokio::runtime::Handle::current()
-                                .block_on(ccx_auth::oauth::login())
-                            {
+                            match ccx_auth::oauth::login().await {
                                 Ok(_) => {
                                     println!(
                                         "\x1b[32mLogin successful!\x1b[0m Restart ccx to use your subscription."
