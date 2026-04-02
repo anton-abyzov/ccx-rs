@@ -39,9 +39,9 @@ pub struct RetryConfig {
 impl Default for RetryConfig {
     fn default() -> Self {
         Self {
-            max_retries: 5,
-            base_delay_ms: 1000,
-            max_delay_ms: 60_000,
+            max_retries: 10,       // More retries — soft rate limits (x-should-retry) are common
+            base_delay_ms: 200,    // Start fast (200ms, not 1s) — matches Claude Code behavior
+            max_delay_ms: 30_000,  // Cap at 30s, not 60s
         }
     }
 }
