@@ -165,7 +165,7 @@ dependencies = [
 
 [[package]]
 name = "ccx-api"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "bytes",
  "ccx-auth",
@@ -179,7 +179,7 @@ dependencies = [
 
 [[package]]
 name = "ccx-auth"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "base64",
  "chrono",
@@ -197,7 +197,7 @@ dependencies = [
 
 [[package]]
 name = "ccx-cli"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "async-trait",
  "ccx-api",
@@ -227,7 +227,7 @@ dependencies = [
 
 [[package]]
 name = "ccx-compact"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "serde",
  "serde_json",
@@ -236,7 +236,7 @@ dependencies = [
 
 [[package]]
 name = "ccx-config"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "ccx-permission",
  "serde",
@@ -246,7 +246,7 @@ dependencies = [
 
 [[package]]
 name = "ccx-core"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "async-trait",
  "ccx-api",
@@ -263,7 +263,7 @@ dependencies = [
 
 [[package]]
 name = "ccx-mcp"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "serde",
  "serde_json",
@@ -273,7 +273,7 @@ dependencies = [
 
 [[package]]
 name = "ccx-memory"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "serde",
  "serde_json",
@@ -282,7 +282,7 @@ dependencies = [
 
 [[package]]
 name = "ccx-permission"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "glob",
  "serde",
@@ -292,7 +292,7 @@ dependencies = [
 
 [[package]]
 name = "ccx-prompt"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "serde",
  "serde_json",
@@ -301,7 +301,7 @@ dependencies = [
 
 [[package]]
 name = "ccx-sandbox"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "serde",
  "thiserror 2.0.18",
@@ -310,7 +310,7 @@ dependencies = [
 
 [[package]]
 name = "ccx-skill"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "dirs",
  "serde",
@@ -320,7 +320,7 @@ dependencies = [
 
 [[package]]
 name = "ccx-tools"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "async-trait",
  "base64",
@@ -338,7 +338,7 @@ dependencies = [
 
 [[package]]
 name = "ccx-tui"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "crossterm",
  "ratatui",

@@ -80,20 +80,26 @@ impl ClaudeClient {
         // Extended thinking graduated to GA — no beta header needed.
 
         let mut headers = HeaderMap::new();
+        // Collect beta headers — OAuth requires an additional beta flag.
+        let mut all_betas: Vec<&str> = betas.to_vec();
         if self.use_oauth {
             headers.insert(
                 "Authorization",
                 HeaderValue::from_str(&format!("Bearer {}", self.api_key)).unwrap(),
             );
+            // OAuth tokens REQUIRE this beta header — without it the API rejects/rate-limits
+            all_betas.push("oauth-2025-04-20");
         } else {
             headers.insert("x-api-key", HeaderValue::from_str(&self.api_key).unwrap());
         }
         headers.insert("anthropic-version", HeaderValue::from_static(API_VERSION));
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-        headers.insert(
-            "anthropic-beta",
-            HeaderValue::from_str(&betas.join(",")).unwrap(),
-        );
+        if !all_betas.is_empty() {
+            headers.insert(
+                "anthropic-beta",
+                HeaderValue::from_str(&all_betas.join(",")).unwrap(),
+            );
+        }
 
         // Build JSON body with structured system prompt for cache_control.
         let mut body = serde_json::to_value(&req).unwrap_or_default();
