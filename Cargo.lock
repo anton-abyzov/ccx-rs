@@ -326,6 +326,7 @@ dependencies = [
  "ccx-api",
  "ccx-core",
  "ccx-sandbox",
+ "dirs",
  "glob",
  "reqwest",
  "serde",

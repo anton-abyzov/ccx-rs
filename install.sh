@@ -24,6 +24,10 @@ case "$OS" in
       *) echo "Unsupported architecture: $ARCH"; exit 1 ;;
     esac
     ;;
+  MINGW*|MSYS*|CYGWIN*)
+    ARTIFACT="ccx-windows-x64.exe"
+    INSTALL_DIR="${CCX_INSTALL_DIR:-$HOME/bin}"
+    ;;
   *) echo "Unsupported OS: $OS"; exit 1 ;;
 esac
 

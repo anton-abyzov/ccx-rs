@@ -248,7 +248,7 @@ fn dirs_path() -> Option<PathBuf> {
 }
 
 fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
+    dirs::home_dir()
 }
 
 /// Attempt to read the API key from the config file.

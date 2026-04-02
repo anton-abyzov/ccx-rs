@@ -12,6 +12,9 @@ impl Sandbox for NoopSandbox {
         _working_dir: &Path,
         _config: &SandboxConfig,
     ) -> Result<Vec<String>, SandboxError> {
+        #[cfg(windows)]
+        return Ok(vec!["cmd".into(), "/C".into(), command.into()]);
+        #[cfg(not(windows))]
         Ok(vec!["bash".into(), "-c".into(), command.into()])
     }
 

@@ -12,21 +12,27 @@
 
 ## Install
 
-### One-liner (recommended)
+### macOS / Linux (one-liner)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/anton-abyzov/ccx-rs/main/install.sh | sh
 ```
 
+### Windows (PowerShell)
+
+```powershell
+irm https://raw.githubusercontent.com/anton-abyzov/ccx-rs/main/install.ps1 | iex
+```
+
 <details>
 <summary>Other install methods</summary>
 
-#### Cargo (from source)
+#### Cargo (from source — all platforms)
 ```bash
 cargo install --git https://github.com/anton-abyzov/ccx-rs ccx-cli
 ```
 
-> **Don't have Rust?** Install it first: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
+> **Don't have Rust?** Install it first: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh` (macOS/Linux) or visit [rustup.rs](https://rustup.rs) (Windows)
 
 #### Manual download
 Download from [GitHub Releases](https://github.com/anton-abyzov/ccx-rs/releases) and add to your PATH.
@@ -35,7 +41,8 @@ Download from [GitHub Releases](https://github.com/anton-abyzov/ccx-rs/releases)
 ```bash
 git clone https://github.com/anton-abyzov/ccx-rs.git
 cd ccx-rs && cargo build --release
-sudo cp target/release/ccx /usr/local/bin/
+# macOS/Linux: sudo cp target/release/ccx /usr/local/bin/
+# Windows: copy target\release\ccx.exe %USERPROFILE%\.ccx\bin\
 ```
 
 </details>

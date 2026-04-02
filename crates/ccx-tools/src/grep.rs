@@ -8,20 +8,34 @@ pub struct GrepTool;
 
 /// Find ripgrep binary — check PATH first, then common install locations.
 fn which_rg() -> String {
-    if let Ok(output) = std::process::Command::new("which").arg("rg").output()
+    // Use platform-appropriate command to find rg in PATH.
+    #[cfg(windows)]
+    let lookup = std::process::Command::new("where").arg("rg").output();
+    #[cfg(not(windows))]
+    let lookup = std::process::Command::new("which").arg("rg").output();
+
+    if let Ok(output) = lookup
         && output.status.success()
     {
-        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let path = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_string();
         if !path.is_empty() {
             return path;
         }
     }
-    // Common fallback paths
+
+    // Common fallback paths (Unix only).
+    #[cfg(not(windows))]
     for path in &["/opt/homebrew/bin/rg", "/usr/local/bin/rg", "/usr/bin/rg"] {
         if std::path::Path::new(path).exists() {
             return path.to_string();
         }
     }
+
     "rg".to_string() // last resort
 }
 

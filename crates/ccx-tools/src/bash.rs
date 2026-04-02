@@ -55,16 +55,26 @@ impl Tool for BashTool {
 
         let run_in_background = input["run_in_background"].as_bool().unwrap_or(false);
 
+        // Select shell based on platform.
+        #[cfg(windows)]
+        let (default_shell, default_flag): (&str, &str) = ("cmd", "/C");
+        #[cfg(not(windows))]
+        let (default_shell, default_flag): (&str, &str) = ("bash", "-c");
+
         // Build the shell command, optionally wrapped in a sandbox.
         let (program, cmd_args) = if ctx.sandboxed {
             let sandbox = ccx_sandbox::create_sandbox();
+            let temp_dir = std::env::temp_dir().to_string_lossy().into_owned();
+            let home_dir = dirs::home_dir()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default();
             let config = ccx_sandbox::SandboxConfig {
                 enabled: true,
                 allow_read: vec!["/".into()],
                 allow_write: vec![
                     ctx.working_dir.to_string_lossy().into_owned(),
-                    "/tmp".into(),
-                    std::env::var("HOME").unwrap_or_default(),
+                    temp_dir,
+                    home_dir,
                 ],
                 allow_network: true,
             };
@@ -74,10 +84,16 @@ impl Tool for BashTool {
                     let args = wrapped[1..].to_vec();
                     (prog, args)
                 }
-                _ => ("bash".into(), vec!["-c".into(), command.into()]),
+                _ => (
+                    default_shell.into(),
+                    vec![default_flag.into(), command.into()],
+                ),
             }
         } else {
-            ("bash".into(), vec!["-c".into(), command.into()])
+            (
+                default_shell.into(),
+                vec![default_flag.into(), command.into()],
+            )
         };
 
         let mut cmd = tokio::process::Command::new(&program);
@@ -85,12 +101,23 @@ impl Tool for BashTool {
             cmd.arg(arg);
         }
         cmd.current_dir(&ctx.working_dir)
-            .env("HOME", std::env::var("HOME").unwrap_or_default())
-            .env("PATH", std::env::var("PATH").unwrap_or_default())
-            .env(
+            .env("PATH", std::env::var("PATH").unwrap_or_default());
+
+        // Platform-specific environment defaults.
+        #[cfg(not(windows))]
+        {
+            cmd.env("HOME", std::env::var("HOME").unwrap_or_default());
+            cmd.env(
                 "TERM",
                 std::env::var("TERM").unwrap_or_else(|_| "xterm-256color".into()),
             );
+        }
+        #[cfg(windows)]
+        {
+            if let Ok(profile) = std::env::var("USERPROFILE") {
+                cmd.env("USERPROFILE", profile);
+            }
+        }
 
         // Propagate common environment variables if set.
         for var in &[
