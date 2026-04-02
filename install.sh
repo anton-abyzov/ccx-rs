@@ -87,6 +87,59 @@ ensure_path_block() {
   PROFILE_UPDATED="$profile"
 }
 
+binary_version() {
+  "$1" --version 2>/dev/null | awk 'NR==1 { print $2 }'
+}
+
+reconcile_existing_installs() {
+  installed="$INSTALL_DIR/ccx"
+  installed_version="$(binary_version "$installed")"
+  seen_paths=""
+  synced_paths=""
+  warning_lines=""
+
+  old_ifs=$IFS
+  IFS=:
+  set -- $PATH
+  IFS=$old_ifs
+
+  for dir do
+    [ -n "$dir" ] || continue
+    candidate="$dir/ccx"
+    [ -f "$candidate" ] || continue
+
+    case ":$seen_paths:" in
+      *":$candidate:"*) continue ;;
+    esac
+    seen_paths="${seen_paths}:$candidate"
+
+    [ "$candidate" = "$installed" ] && continue
+
+    candidate_version="$(binary_version "$candidate")"
+    [ "$candidate_version" = "$installed_version" ] && continue
+
+    candidate_dir="$(dirname "$candidate")"
+    if [ -w "$candidate_dir" ]; then
+      cp "$installed" "$candidate"
+      chmod +x "$candidate"
+      synced_paths="${synced_paths}\n  $candidate"
+    else
+      if [ -n "$candidate_version" ]; then
+        warning_lines="${warning_lines}\n  Stale ccx binary on PATH: $candidate (v$candidate_version); remove it or replace it with v$installed_version."
+      else
+        warning_lines="${warning_lines}\n  Stale ccx binary on PATH: $candidate; remove it or replace it with v$installed_version."
+      fi
+    fi
+  done
+
+  if [ -n "$synced_paths" ]; then
+    printf '\nAlso updated duplicate installs:%b\n' "$synced_paths"
+  fi
+  if [ -n "$warning_lines" ]; then
+    printf '\nWarning:%b\n' "$warning_lines"
+  fi
+}
+
 INSTALL_DIR="$(choose_install_dir)"
 PROFILE_UPDATED=""
 
@@ -147,6 +200,9 @@ echo "✓ CCX installed to $INSTALL_DIR/ccx"
 if [ -n "$PROFILE_UPDATED" ]; then
   echo "✓ Updated shell profile: $PROFILE_UPDATED"
 fi
+
+reconcile_existing_installs
+
 echo ""
 if ! path_contains_dir "$INSTALL_DIR"; then
   echo "Run in this shell:"
@@ -166,5 +222,5 @@ echo "  # Free (OpenRouter — no subscription needed):"
 echo "  export OPENROUTER_API_KEY=\"your-key-from-openrouter.ai/keys\""
 echo "  ccx --model nemotron"
 echo ""
-echo "  # Claude Max/Pro (auto-detected):"
+echo "  # Claude subscription (auto-detected via OAuth):"
 echo "  ccx"

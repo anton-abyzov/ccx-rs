@@ -752,15 +752,16 @@ fn is_dir_writable(dir: &std::path::Path) -> bool {
     }
 }
 
-fn install_downloaded_binary(
-    downloaded_path: &std::path::Path,
+fn copy_binary_to_path(
+    source_path: &std::path::Path,
     install_path: &std::path::Path,
+    remove_source: bool,
 ) -> Result<(), String> {
     if let Some(parent) = install_path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("failed to create {}: {e}", parent.display()))?;
     }
-    std::fs::copy(downloaded_path, install_path)
+    std::fs::copy(source_path, install_path)
         .map_err(|e| format!("failed to copy to {}: {e}", install_path.display()))?;
     #[cfg(unix)]
     {
@@ -772,8 +773,103 @@ fn install_downloaded_binary(
         std::fs::set_permissions(install_path, perms)
             .map_err(|e| format!("failed to chmod {}: {e}", install_path.display()))?;
     }
-    let _ = std::fs::remove_file(downloaded_path);
+    if remove_source {
+        let _ = std::fs::remove_file(source_path);
+    }
     Ok(())
+}
+
+fn install_downloaded_binary(
+    downloaded_path: &std::path::Path,
+    install_path: &std::path::Path,
+) -> Result<(), String> {
+    copy_binary_to_path(downloaded_path, install_path, true)
+}
+
+fn discover_ccx_binaries_on_path() -> Vec<std::path::PathBuf> {
+    let mut results = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    for dir in std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()) {
+        let candidate = dir.join(ccx_binary_name());
+        if !candidate.is_file() {
+            continue;
+        }
+
+        let key = candidate
+            .canonicalize()
+            .unwrap_or_else(|_| candidate.clone());
+        if seen.insert(key) {
+            results.push(candidate);
+        }
+    }
+
+    results
+}
+
+fn read_ccx_version(path: &std::path::Path) -> Option<String> {
+    let output = std::process::Command::new(path)
+        .arg("--version")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    String::from_utf8(output.stdout)
+        .ok()?
+        .split_whitespace()
+        .nth(1)
+        .map(|value| value.trim().to_string())
+}
+
+fn reconcile_duplicate_binaries(
+    primary_install_path: &std::path::Path,
+    version: &str,
+) -> (Vec<std::path::PathBuf>, Vec<String>) {
+    let mut synced = Vec::new();
+    let mut warnings = Vec::new();
+    let primary_key = primary_install_path
+        .canonicalize()
+        .unwrap_or_else(|_| primary_install_path.to_path_buf());
+
+    for candidate in discover_ccx_binaries_on_path() {
+        let candidate_key = candidate
+            .canonicalize()
+            .unwrap_or_else(|_| candidate.clone());
+        if candidate_key == primary_key {
+            continue;
+        }
+
+        let candidate_version = read_ccx_version(&candidate);
+        if candidate_version.as_deref() == Some(version) {
+            continue;
+        }
+
+        let Some(parent) = candidate.parent() else {
+            continue;
+        };
+
+        if is_dir_writable(parent) {
+            match copy_binary_to_path(primary_install_path, &candidate, false) {
+                Ok(()) => synced.push(candidate),
+                Err(err) => warnings.push(err),
+            }
+        } else {
+            let version_suffix = candidate_version
+                .as_deref()
+                .map(|value| format!(" (v{value})"))
+                .unwrap_or_default();
+            warnings.push(format!(
+                "Stale ccx binary on PATH: {}{}; remove it or replace it with v{}.",
+                candidate.display(),
+                version_suffix,
+                version
+            ));
+        }
+    }
+
+    (synced, warnings)
 }
 
 fn run_update() {
@@ -901,6 +997,21 @@ fn run_update() {
                                     } else {
                                         println!("  export PATH=\"{}:$PATH\"", install_dir.display());
                                         println!("  hash -r");
+                                    }
+                                }
+
+                                let (synced, warnings) =
+                                    reconcile_duplicate_binaries(&install_target, latest);
+                                if !synced.is_empty() {
+                                    println!("\n\x1b[38;2;138;99;210mAlso updated duplicate installs:\x1b[0m");
+                                    for path in synced {
+                                        println!("  {}", path.display());
+                                    }
+                                }
+                                if !warnings.is_empty() {
+                                    eprintln!("\n\x1b[33mWarning:\x1b[0m");
+                                    for warning in warnings {
+                                        eprintln!("  {warning}");
                                     }
                                 }
                             } else {
