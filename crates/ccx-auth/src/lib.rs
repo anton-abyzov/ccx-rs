@@ -1,5 +1,6 @@
 pub mod oauth;
 
+use std::io::Write;
 use std::path::PathBuf;
 
 /// Errors during API key resolution.
@@ -138,13 +139,36 @@ pub fn resolve_auth(explicit: Option<&str>) -> Result<AuthMethod, AuthError> {
         return Ok(oauth);
     }
 
-    // 5. Config file API key.
+    // 5. Config file API key (~/.claude/config.json).
     if let Some(key) = read_key_from_config()? {
         let config_path = config_file_path().unwrap();
         return Ok(AuthMethod::ApiKey(ResolvedKey {
             key,
             source: KeySource::ConfigFile(config_path),
         }));
+    }
+
+    // 6. CCX saved credentials (~/.ccx/config.json).
+    if let Some((provider, key)) = read_ccx_config_credential() {
+        match provider.as_str() {
+            "anthropic" => {
+                return Ok(AuthMethod::ApiKey(ResolvedKey {
+                    key,
+                    source: KeySource::ConfigFile(ccx_config_path().unwrap()),
+                }));
+            }
+            // For non-Anthropic providers, set the env var so downstream
+            // provider detection picks it up.
+            "openrouter" => {
+                // SAFETY: single-threaded startup path.
+                unsafe { std::env::set_var("OPENROUTER_API_KEY", &key) };
+            }
+            "openai" => {
+                unsafe { std::env::set_var("OPENAI_API_KEY", &key) };
+            }
+            _ => {}
+        }
+        // Fall through so run_chat() auto-detects the env var provider.
     }
 
     Err(AuthError::NoCredentials)
@@ -282,6 +306,131 @@ fn read_key_from_config() -> Result<Option<String>, AuthError> {
         .map(|s| s.to_string());
 
     Ok(key)
+}
+
+/// Path to ~/.ccx/config.json (CCX-specific config).
+pub fn ccx_config_path() -> Option<PathBuf> {
+    home_dir().map(|h| h.join(".ccx/config.json"))
+}
+
+/// Read the default provider and its key from ~/.ccx/config.json.
+fn read_ccx_config_credential() -> Option<(String, String)> {
+    let path = ccx_config_path()?;
+    let content = std::fs::read_to_string(path).ok()?;
+    let config: serde_json::Value = serde_json::from_str(&content).ok()?;
+
+    let provider = config.get("default_provider")?.as_str()?.to_string();
+    let creds = config.get("credentials")?;
+
+    let key_field = match provider.as_str() {
+        "anthropic" => "anthropic_api_key",
+        "openrouter" => "openrouter_api_key",
+        "openai" => "openai_api_key",
+        _ => return None,
+    };
+
+    let key = creds.get(key_field)?.as_str()?.to_string();
+    if key.is_empty() {
+        return None;
+    }
+    Some((provider, key))
+}
+
+/// Save a credential to ~/.ccx/config.json, merging with existing data.
+pub fn save_ccx_credential(provider: &str, key: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let path = ccx_config_path().ok_or("Cannot determine home directory")?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    // Load existing config or start fresh.
+    let mut config: serde_json::Value = if path.exists() {
+        let content = std::fs::read_to_string(&path)?;
+        serde_json::from_str(&content).unwrap_or(serde_json::json!({}))
+    } else {
+        serde_json::json!({})
+    };
+
+    config["default_provider"] = serde_json::json!(provider);
+
+    let key_field = match provider {
+        "anthropic" => "anthropic_api_key",
+        "openrouter" => "openrouter_api_key",
+        "openai" => "openai_api_key",
+        _ => return Err(format!("Unknown provider: {provider}").into()),
+    };
+
+    if config.get("credentials").is_none() {
+        config["credentials"] = serde_json::json!({});
+    }
+    config["credentials"][key_field] = serde_json::json!(key);
+
+    // Write with restricted permissions on Unix.
+    let json_str = serde_json::to_string_pretty(&config)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&path)?
+            .write_all(json_str.as_bytes())?;
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(&path, &json_str)?;
+    }
+
+    Ok(())
+}
+
+/// Validate an API key by making a lightweight test call. Returns Ok(()) if valid.
+pub async fn validate_api_key(
+    provider: &str,
+    key: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let client = reqwest::Client::new();
+    match provider {
+        "anthropic" => {
+            let resp = client
+                .post("https://api.anthropic.com/v1/messages")
+                .header("x-api-key", key)
+                .header("anthropic-version", "2023-06-01")
+                .header("content-type", "application/json")
+                .body(r#"{"model":"claude-haiku-4-5-20241022","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}"#)
+                .send()
+                .await?;
+            if resp.status() == 401 {
+                return Err("Invalid API key".into());
+            }
+            Ok(())
+        }
+        "openrouter" => {
+            let resp = client
+                .get("https://openrouter.ai/api/v1/models")
+                .header("Authorization", format!("Bearer {key}"))
+                .send()
+                .await?;
+            if resp.status() == 401 {
+                return Err("Invalid API key".into());
+            }
+            Ok(())
+        }
+        "openai" => {
+            let resp = client
+                .get("https://api.openai.com/v1/models")
+                .header("Authorization", format!("Bearer {key}"))
+                .send()
+                .await?;
+            if resp.status() == 401 {
+                return Err("Invalid API key".into());
+            }
+            Ok(())
+        }
+        _ => Err(format!("Unknown provider: {provider}").into()),
+    }
 }
 
 #[cfg(test)]

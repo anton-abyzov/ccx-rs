@@ -23,6 +23,7 @@ ccx-mcp = { path = "../ccx-mcp" }
 ccx-skill = { path = "../ccx-skill" }
 ccx-sandbox = { path = "../ccx-sandbox" }
 ccx-tui = { path = "../ccx-tui" }
+crossterm = "0.28"
 async-trait = { workspace = true }
 clap = { workspace = true }
 serde = { workspace = true }

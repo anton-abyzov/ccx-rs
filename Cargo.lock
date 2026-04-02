@@ -214,6 +214,7 @@ dependencies = [
  "ccx-tools",
  "ccx-tui",
  "clap",
+ "crossterm",
  "dirs",
  "env_logger",
  "futures",

@@ -847,83 +847,366 @@ fn effort_config(effort: &str) -> (u32, bool, u32) {
     }
 }
 
-/// Print a friendly authentication guide when no credentials are found.
-/// In interactive mode, prompts for provider choice and runs OAuth if selected.
-fn print_auth_guide(print_mode: bool) {
+/// User's choice from the interactive auth picker.
+#[derive(Debug, Clone, Copy)]
+enum AuthChoice {
+    ClaudeSubscription,
+    AnthropicApiKey,
+    OpenRouter,
+    OpenAi,
+}
+
+/// Render the auth picker box with the currently selected item highlighted.
+fn render_picker(selected: usize) {
+    let purple = "\x1b[38;2;138;99;210m";
+    let bold = "\x1b[1m";
+    let dim = "\x1b[90m";
+    let reset = "\x1b[0m";
+    let arrow = "\x1b[38;2;138;99;210m❯\x1b[0m";
+
+    let options: &[(&str, &str)] = &[
+        (
+            "Claude subscription (Pro/Max/Team)",
+            "Opens browser → sign in → auto-connect",
+        ),
+        (
+            "Anthropic API key",
+            "Enter key from console.anthropic.com",
+        ),
+        (
+            "OpenRouter (free models available)",
+            "Enter key from openrouter.ai/keys",
+        ),
+        ("OpenAI (GPT-4o, o1)", "Enter your OpenAI API key"),
+    ];
+
+    print!("\x1b[2J\x1b[H"); // clear screen, cursor home
+    println!();
+    println!("{purple}╭──────────────────────────────────────────────────╮{reset}");
+    println!("{purple}│{reset}                                                  {purple}│{reset}");
+    println!("{purple}│{reset}  {bold}Welcome to CCX!{reset}                                 {purple}│{reset}");
+    println!("{purple}│{reset}                                                  {purple}│{reset}");
+    println!("{purple}│{reset}  Select login method:                            {purple}│{reset}");
+    println!("{purple}│{reset}                                                  {purple}│{reset}");
+
+    for (i, (label, hint)) in options.iter().enumerate() {
+        let prefix = if i == selected {
+            format!("{arrow} {bold}{}{reset}", i + 1)
+        } else {
+            format!("  {dim}{}{reset}", i + 1)
+        };
+        let label_fmt = if i == selected {
+            format!("{bold}{label}{reset}")
+        } else {
+            label.to_string()
+        };
+        // Option line
+        println!(
+            "{purple}│{reset}  {prefix}. {label_fmt:<42}{purple}│{reset}"
+        );
+        // Hint line (dimmed)
+        println!(
+            "{purple}│{reset}       {dim}{hint:<43}{reset}{purple}│{reset}"
+        );
+        println!("{purple}│{reset}                                                  {purple}│{reset}");
+    }
+
+    println!("{purple}╰──────────────────────────────────────────────────╯{reset}");
+    println!();
+    println!(
+        "{dim}  ↑/↓ to navigate  •  Enter to select  •  Esc to quit{reset}"
+    );
+    std::io::stdout().flush().ok();
+}
+
+/// Show an interactive login picker using crossterm raw mode.
+/// Returns the user's choice, or None if they press Esc.
+fn interactive_auth_picker() -> Option<AuthChoice> {
+    use crossterm::event::{self, Event, KeyCode};
+    use crossterm::terminal;
+
+    let mut selected: usize = 0;
+    let num_options = 4;
+
+    terminal::enable_raw_mode().ok()?;
+    render_picker(selected);
+
+    let result = loop {
+        if let Ok(Event::Key(key)) = event::read() {
+            match key.code {
+                KeyCode::Up | KeyCode::Char('k') => {
+                    if selected > 0 {
+                        selected -= 1;
+                    }
+                    render_picker(selected);
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    if selected < num_options - 1 {
+                        selected += 1;
+                    }
+                    render_picker(selected);
+                }
+                KeyCode::Char('1') => {
+                    selected = 0;
+                    break Some(selected);
+                }
+                KeyCode::Char('2') => {
+                    selected = 1;
+                    break Some(selected);
+                }
+                KeyCode::Char('3') => {
+                    selected = 2;
+                    break Some(selected);
+                }
+                KeyCode::Char('4') => {
+                    selected = 3;
+                    break Some(selected);
+                }
+                KeyCode::Enter => break Some(selected),
+                KeyCode::Esc | KeyCode::Char('q') => break None,
+                _ => {}
+            }
+        }
+    };
+
+    terminal::disable_raw_mode().ok();
+    // Clear the picker screen
+    print!("\x1b[2J\x1b[H");
+    std::io::stdout().flush().ok();
+
+    result.map(|idx| match idx {
+        0 => AuthChoice::ClaudeSubscription,
+        1 => AuthChoice::AnthropicApiKey,
+        2 => AuthChoice::OpenRouter,
+        3 => AuthChoice::OpenAi,
+        _ => unreachable!(),
+    })
+}
+
+/// Print a non-interactive authentication guide (for print/pipe mode).
+fn print_auth_guide_noninteractive() {
     let purple = "\x1b[38;2;138;99;210m";
     let bold = "\x1b[1m";
     let dim = "\x1b[90m";
     let reset = "\x1b[0m";
 
     println!();
-    println!("{purple}╭──────────────────────────────────────────────╮{reset}");
-    println!("{purple}│{reset}                                              {purple}│{reset}");
-    println!("{purple}│{reset}  {bold}Welcome to CCX!{reset}                             {purple}│{reset}");
-    println!("{purple}│{reset}                                              {purple}│{reset}");
-    println!("{purple}│{reset}  Choose your provider:                       {purple}│{reset}");
-    println!("{purple}│{reset}                                              {purple}│{reset}");
-    println!("{purple}│{reset}  {purple}[1]{reset} {bold}Claude Max/Pro{reset} (recommended)            {purple}│{reset}");
-    println!("{purple}│{reset}      Opens browser → sign in → auto-token    {purple}│{reset}");
-    println!("{purple}│{reset}                                              {purple}│{reset}");
-    println!("{purple}│{reset}  {purple}[2]{reset} {bold}Free models{reset} (OpenRouter)                 {purple}│{reset}");
-    println!("{purple}│{reset}      Get free key at openrouter.ai/keys      {purple}│{reset}");
-    println!("{purple}│{reset}                                              {purple}│{reset}");
-    println!("{purple}│{reset}  {purple}[3]{reset} {bold}Claude API key{reset}                           {purple}│{reset}");
-    println!("{purple}│{reset}      export ANTHROPIC_API_KEY=\"sk-ant-...\"   {purple}│{reset}");
-    println!("{purple}│{reset}                                              {purple}│{reset}");
-    println!("{purple}│{reset}  {purple}[4]{reset} {bold}OpenAI (GPT-4o){reset}                          {purple}│{reset}");
-    println!("{purple}│{reset}      export OPENAI_API_KEY=\"sk-...\"          {purple}│{reset}");
-    println!("{purple}│{reset}                                              {purple}│{reset}");
-    println!("{purple}╰──────────────────────────────────────────────╯{reset}");
+    println!("{purple}╭──────────────────────────────────────────────────╮{reset}");
+    println!("{purple}│{reset}                                                  {purple}│{reset}");
+    println!("{purple}│{reset}  {bold}Welcome to CCX!{reset}                                 {purple}│{reset}");
+    println!("{purple}│{reset}                                                  {purple}│{reset}");
+    println!("{purple}│{reset}  No credentials found. Options:                  {purple}│{reset}");
+    println!("{purple}│{reset}                                                  {purple}│{reset}");
+    println!("{purple}│{reset}  {purple}1.{reset} {bold}Claude subscription{reset} — run: ccx /login        {purple}│{reset}");
+    println!("{purple}│{reset}  {purple}2.{reset} {bold}Anthropic API key{reset}                           {purple}│{reset}");
+    println!("{purple}│{reset}       export ANTHROPIC_API_KEY=\"sk-ant-...\"      {purple}│{reset}");
+    println!("{purple}│{reset}  {purple}3.{reset} {bold}OpenRouter{reset} — openrouter.ai/keys              {purple}│{reset}");
+    println!("{purple}│{reset}       export OPENROUTER_API_KEY=\"sk-or-...\"      {purple}│{reset}");
+    println!("{purple}│{reset}  {purple}4.{reset} {bold}OpenAI{reset} — platform.openai.com/api-keys        {purple}│{reset}");
+    println!("{purple}│{reset}       export OPENAI_API_KEY=\"sk-...\"             {purple}│{reset}");
+    println!("{purple}│{reset}                                                  {purple}│{reset}");
+    println!("{purple}╰──────────────────────────────────────────────────╯{reset}");
     println!();
+    println!("{dim}Set one of the above and re-run ccx.{reset}");
+}
 
-    if print_mode {
-        // Non-interactive: just show the guide and exit
-        println!("{dim}Set one of the above and re-run ccx.{reset}");
-        return;
-    }
+/// Prompt the user for an API key (after exiting raw mode).
+fn prompt_for_api_key(provider_name: &str, url: &str) -> Option<String> {
+    let bold = "\x1b[1m";
+    let reset = "\x1b[0m";
 
-    // Interactive: prompt for choice
-    print!("Enter choice (1-4): ");
+    println!();
+    println!(
+        "Get your API key at: {bold}{url}{reset}"
+    );
+    println!();
+    print!("Enter API key: ");
     std::io::stdout().flush().ok();
 
-    let mut choice = String::new();
-    if std::io::stdin().read_line(&mut choice).is_ok() {
-        match choice.trim() {
-            "1" => {
-                println!();
-                println!("{purple}⚡{reset} Starting browser login...");
-                // OAuth login will be handled by the interactive session (/login)
-                println!("{dim}Starting interactive mode — running /login automatically...{reset}");
-                println!();
+    let mut key = String::new();
+    if std::io::stdin().read_line(&mut key).is_err() {
+        eprintln!("Failed to read input");
+        return None;
+    }
+    let key = key.trim().to_string();
+    if key.is_empty() {
+        eprintln!("No key entered. Run ccx again to retry.");
+        return None;
+    }
+    let _ = provider_name; // used in caller context
+    Some(key)
+}
+
+/// Handle the first-run authentication flow when no credentials are found.
+/// In interactive mode, shows the picker. In print mode, shows the guide and exits.
+async fn run_first_run_auth(
+    print_mode: bool,
+    model: &str,
+    _oi_key_env: &Option<String>,
+) -> (
+    ccx_api::ApiClient,
+    String,
+    Option<String>,
+    bool,
+    String,
+    String,
+) {
+    if print_mode {
+        print_auth_guide_noninteractive();
+        std::process::exit(1);
+    }
+
+    let green = "\x1b[32m";
+    let dim = "\x1b[90m";
+    let reset = "\x1b[0m";
+
+    let choice = interactive_auth_picker();
+
+    match choice {
+        Some(AuthChoice::ClaudeSubscription) => {
+            println!("{dim}Starting browser login...{reset}");
+            match ccx_auth::oauth::login().await {
+                Ok(tokens) => {
+                    let email = ccx_auth::fetch_oauth_email(&tokens.access_token).await;
+                    if let Some(ref e) = email {
+                        println!("{green}✓ Logged in as {e}{reset}");
+                    } else {
+                        println!("{green}✓ Logged in successfully!{reset}");
+                    }
+                    let auth = ccx_auth::AuthMethod::OAuthToken {
+                        access_token: tokens.access_token.clone(),
+                        subscription_type: "unknown".to_string(),
+                    };
+                    let client = ccx_api::ApiClient::Claude(
+                        ccx_api::ClaudeClient::with_auth(&auth, model),
+                    );
+                    (
+                        client,
+                        auth.display_label().to_string(),
+                        email,
+                        false,
+                        tokens.access_token,
+                        "anthropic".to_string(),
+                    )
+                }
+                Err(e) => {
+                    eprintln!("\x1b[31mOAuth login failed: {e}\x1b[0m");
+                    eprintln!("{dim}Starting without authentication — type /login to retry.{reset}");
+                    let auth = ccx_auth::AuthMethod::None;
+                    let client = ccx_api::ApiClient::Claude(
+                        ccx_api::ClaudeClient::with_auth(&auth, model),
+                    );
+                    (client, auth.display_label().to_string(), None, true, String::new(), "anthropic".to_string())
+                }
             }
-            "2" => {
-                println!();
-                println!("  1. Get a free key at: {bold}https://openrouter.ai/keys{reset}");
-                println!("  2. Then run:");
-                println!("     {bold}export OPENROUTER_API_KEY=\"sk-or-...\"{reset}");
-                println!("     {bold}ccx --model nemotron{reset}");
-                println!();
+        }
+        Some(AuthChoice::AnthropicApiKey) => {
+            if let Some(key) = prompt_for_api_key("Anthropic", "https://console.anthropic.com/settings/keys") {
+                println!("{dim}Validating...{reset}");
+                match ccx_auth::validate_api_key("anthropic", &key).await {
+                    Ok(()) => {
+                        if let Err(e) = ccx_auth::save_ccx_credential("anthropic", &key) {
+                            eprintln!("{dim}Warning: could not save credentials: {e}{reset}");
+                        }
+                        println!("{green}✓ API key validated. Using Anthropic provider.{reset}");
+                        // Set for this session
+                        unsafe { std::env::set_var("ANTHROPIC_API_KEY", &key) };
+                        let auth = ccx_auth::AuthMethod::ApiKey(ccx_auth::ResolvedKey {
+                            key: key.clone(),
+                            source: ccx_auth::KeySource::ConfigFile(ccx_auth::ccx_config_path().unwrap()),
+                        });
+                        let client = ccx_api::ApiClient::Claude(
+                            ccx_api::ClaudeClient::with_auth(&auth, model),
+                        );
+                        (client, "API Key".to_string(), None, false, key, "anthropic".to_string())
+                    }
+                    Err(e) => {
+                        eprintln!("\x1b[31mValidation failed: {e}\x1b[0m");
+                        eprintln!("{dim}Starting without authentication — type /login to retry.{reset}");
+                        let auth = ccx_auth::AuthMethod::None;
+                        let client = ccx_api::ApiClient::Claude(
+                            ccx_api::ClaudeClient::with_auth(&auth, model),
+                        );
+                        (client, auth.display_label().to_string(), None, true, String::new(), "anthropic".to_string())
+                    }
+                }
+            } else {
+                let auth = ccx_auth::AuthMethod::None;
+                let client = ccx_api::ApiClient::Claude(
+                    ccx_api::ClaudeClient::with_auth(&auth, model),
+                );
+                (client, auth.display_label().to_string(), None, true, String::new(), "anthropic".to_string())
             }
-            "3" => {
-                println!();
-                println!("  1. Get a key at: {bold}https://console.anthropic.com/settings/keys{reset}");
-                println!("  2. Then run:");
-                println!("     {bold}export ANTHROPIC_API_KEY=\"sk-ant-...\"{reset}");
-                println!();
+        }
+        Some(AuthChoice::OpenRouter) => {
+            if let Some(key) = prompt_for_api_key("OpenRouter", "https://openrouter.ai/keys") {
+                println!("{dim}Validating...{reset}");
+                match ccx_auth::validate_api_key("openrouter", &key).await {
+                    Ok(()) => {
+                        if let Err(e) = ccx_auth::save_ccx_credential("openrouter", &key) {
+                            eprintln!("{dim}Warning: could not save credentials: {e}{reset}");
+                        }
+                        println!("{green}✓ API key validated. Using OpenRouter provider.{reset}");
+                        unsafe { std::env::set_var("OPENROUTER_API_KEY", &key) };
+                        let client = ccx_api::ApiClient::OpenAi(
+                            ccx_api::OpenAiClient::openrouter(&key, model),
+                        );
+                        (client, "OpenRouter".to_string(), None, false, key, "openrouter".to_string())
+                    }
+                    Err(e) => {
+                        eprintln!("\x1b[31mValidation failed: {e}\x1b[0m");
+                        eprintln!("{dim}Starting without authentication — type /login to retry.{reset}");
+                        let auth = ccx_auth::AuthMethod::None;
+                        let client = ccx_api::ApiClient::Claude(
+                            ccx_api::ClaudeClient::with_auth(&auth, model),
+                        );
+                        (client, auth.display_label().to_string(), None, true, String::new(), "anthropic".to_string())
+                    }
+                }
+            } else {
+                let auth = ccx_auth::AuthMethod::None;
+                let client = ccx_api::ApiClient::Claude(
+                    ccx_api::ClaudeClient::with_auth(&auth, model),
+                );
+                (client, auth.display_label().to_string(), None, true, String::new(), "anthropic".to_string())
             }
-            "4" => {
-                println!();
-                println!("  1. Get a key at: {bold}https://platform.openai.com/api-keys{reset}");
-                println!("  2. Then run:");
-                println!("     {bold}export OPENAI_API_KEY=\"sk-...\"{reset}");
-                println!();
+        }
+        Some(AuthChoice::OpenAi) => {
+            if let Some(key) = prompt_for_api_key("OpenAI", "https://platform.openai.com/api-keys") {
+                println!("{dim}Validating...{reset}");
+                match ccx_auth::validate_api_key("openai", &key).await {
+                    Ok(()) => {
+                        if let Err(e) = ccx_auth::save_ccx_credential("openai", &key) {
+                            eprintln!("{dim}Warning: could not save credentials: {e}{reset}");
+                        }
+                        println!("{green}✓ API key validated. Using OpenAI provider.{reset}");
+                        unsafe { std::env::set_var("OPENAI_API_KEY", &key) };
+                        let client = ccx_api::ApiClient::OpenAi(
+                            ccx_api::OpenAiClient::openai(&key, model),
+                        );
+                        (client, "OpenAI".to_string(), None, false, key, "openai".to_string())
+                    }
+                    Err(e) => {
+                        eprintln!("\x1b[31mValidation failed: {e}\x1b[0m");
+                        eprintln!("{dim}Starting without authentication — type /login to retry.{reset}");
+                        let auth = ccx_auth::AuthMethod::None;
+                        let client = ccx_api::ApiClient::Claude(
+                            ccx_api::ClaudeClient::with_auth(&auth, model),
+                        );
+                        (client, auth.display_label().to_string(), None, true, String::new(), "anthropic".to_string())
+                    }
+                }
+            } else {
+                let auth = ccx_auth::AuthMethod::None;
+                let client = ccx_api::ApiClient::Claude(
+                    ccx_api::ClaudeClient::with_auth(&auth, model),
+                );
+                (client, auth.display_label().to_string(), None, true, String::new(), "anthropic".to_string())
             }
-            _ => {
-                println!();
-                println!("{dim}Starting interactive mode — type /login to authenticate.{reset}");
-                println!();
-            }
+        }
+        None => {
+            // User pressed Esc/quit
+            std::process::exit(0);
         }
     }
 }
@@ -1027,7 +1310,7 @@ async fn run_chat(
                     )
                 }
                 Err(_) => {
-                    // Auto-detect: try OpenRouter, then OpenAI, then give up.
+                    // Auto-detect: try OpenRouter, then OpenAI env vars first.
                     if let Some(ref or_key) = or_key_env {
                         if !or_key.is_empty() {
                             let client = ccx_api::ApiClient::OpenAi(
@@ -1041,54 +1324,8 @@ async fn run_chat(
                                 or_key.clone(),
                                 "openrouter".to_string(),
                             )
-                        } else if let Some(ref oi_key) = oi_key_env {
-                            if !oi_key.is_empty() {
-                                let client = ccx_api::ApiClient::OpenAi(
-                                    ccx_api::OpenAiClient::openai(oi_key, model),
-                                );
-                                (
-                                    client,
-                                    "OpenAI (auto-detected)".to_string(),
-                                    None,
-                                    false,
-                                    oi_key.clone(),
-                                    "openai".to_string(),
-                                )
-                            } else {
-                                print_auth_guide(print_mode);
-                                if print_mode {
-                                    std::process::exit(1);
-                                }
-                                let auth = ccx_auth::AuthMethod::None;
-                                let client = ccx_api::ApiClient::Claude(
-                                    ccx_api::ClaudeClient::with_auth(&auth, model),
-                                );
-                                (
-                                    client,
-                                    auth.display_label().to_string(),
-                                    None,
-                                    true,
-                                    String::new(),
-                                    "anthropic".to_string(),
-                                )
-                            }
                         } else {
-                            print_auth_guide(print_mode);
-                            if print_mode {
-                                std::process::exit(1);
-                            }
-                            let auth = ccx_auth::AuthMethod::None;
-                            let client = ccx_api::ApiClient::Claude(
-                                ccx_api::ClaudeClient::with_auth(&auth, model),
-                            );
-                            (
-                                client,
-                                auth.display_label().to_string(),
-                                None,
-                                true,
-                                String::new(),
-                                "anthropic".to_string(),
-                            )
+                            run_first_run_auth(print_mode, model, &oi_key_env).await
                         }
                     } else if let Some(ref oi_key) = oi_key_env {
                         if !oi_key.is_empty() {
@@ -1104,40 +1341,10 @@ async fn run_chat(
                                 "openai".to_string(),
                             )
                         } else {
-                            print_auth_guide(print_mode);
-                            if print_mode {
-                                std::process::exit(1);
-                            }
-                            let auth = ccx_auth::AuthMethod::None;
-                            let client = ccx_api::ApiClient::Claude(
-                                ccx_api::ClaudeClient::with_auth(&auth, model),
-                            );
-                            (
-                                client,
-                                auth.display_label().to_string(),
-                                None,
-                                true,
-                                String::new(),
-                                "anthropic".to_string(),
-                            )
+                            run_first_run_auth(print_mode, model, &oi_key_env).await
                         }
                     } else {
-                        print_auth_guide(print_mode);
-                        if print_mode {
-                            std::process::exit(1);
-                        }
-                        let auth = ccx_auth::AuthMethod::None;
-                        let client = ccx_api::ApiClient::Claude(
-                            ccx_api::ClaudeClient::with_auth(&auth, model),
-                        );
-                        (
-                            client,
-                            auth.display_label().to_string(),
-                            None,
-                            true,
-                            String::new(),
-                            "anthropic".to_string(),
-                        )
+                        run_first_run_auth(print_mode, model, &oi_key_env).await
                     }
                 }
             }
