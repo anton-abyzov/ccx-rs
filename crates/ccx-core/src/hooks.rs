@@ -51,11 +51,9 @@ impl HookRegistry {
                     return false;
                 }
                 match (&h.pattern, tool_name) {
-                    (Some(pattern), Some(name)) => {
-                        glob::Pattern::new(pattern)
-                            .map(|p| p.matches(name))
-                            .unwrap_or(false)
-                    }
+                    (Some(pattern), Some(name)) => glob::Pattern::new(pattern)
+                        .map(|p| p.matches(name))
+                        .unwrap_or(false),
                     (Some(_), None) => false,
                     (None, _) => true,
                 }

@@ -113,10 +113,10 @@ fn build_tools_section(tools: &[ToolSchema]) -> String {
     let mut section = String::from("\n# Available Tools\n\n");
     for tool in tools {
         section.push_str(&format!("### {}\n{}\n\n", tool.name, tool.description));
-        if let Some(ref schema) = tool.input_schema {
-            if let Ok(pretty) = serde_json::to_string_pretty(schema) {
-                section.push_str(&format!("Input schema:\n```json\n{pretty}\n```\n\n"));
-            }
+        if let Some(ref schema) = tool.input_schema
+            && let Ok(pretty) = serde_json::to_string_pretty(schema)
+        {
+            section.push_str(&format!("Input schema:\n```json\n{pretty}\n```\n\n"));
         }
     }
     section
@@ -140,7 +140,11 @@ fn build_skills_section(skills: &[SkillInfo]) -> String {
     if !builtins.is_empty() {
         s += "### Built-in:\n";
         for sk in &builtins {
-            s += &format!("- `/{name}` — {desc}\n", name = sk.name, desc = truncate_desc(&sk.description, 80));
+            s += &format!(
+                "- `/{name}` — {desc}\n",
+                name = sk.name,
+                desc = truncate_desc(&sk.description, 80)
+            );
         }
         s += "\n";
     }
@@ -149,22 +153,43 @@ fn build_skills_section(skills: &[SkillInfo]) -> String {
         s += "### SpecWeave (project management):\n";
         // Only include the most important ones to save tokens.
         const IMPORTANT: &[&str] = &[
-            "sw:increment", "sw:do", "sw:done", "sw:team-lead", "sw:auto",
-            "sw:grill", "sw:architect", "sw:pm", "sw:progress",
-            "sw:brainstorm", "sw:help", "sw:validate", "sw:code-reviewer",
+            "sw:increment",
+            "sw:do",
+            "sw:done",
+            "sw:team-lead",
+            "sw:auto",
+            "sw:grill",
+            "sw:architect",
+            "sw:pm",
+            "sw:progress",
+            "sw:brainstorm",
+            "sw:help",
+            "sw:validate",
+            "sw:code-reviewer",
         ];
         for sk in &sw_skills {
             if IMPORTANT.contains(&sk.name.as_str()) {
-                s += &format!("- `/{name}` — {desc}\n", name = sk.name, desc = truncate_desc(&sk.description, 80));
+                s += &format!(
+                    "- `/{name}` — {desc}\n",
+                    name = sk.name,
+                    desc = truncate_desc(&sk.description, 80)
+                );
             }
         }
-        s += &format!("\n{} more SpecWeave skills available. Type `/help` to see all.\n\n", sw_skills.len());
+        s += &format!(
+            "\n{} more SpecWeave skills available. Type `/help` to see all.\n\n",
+            sw_skills.len()
+        );
     }
 
     if !other_skills.is_empty() {
         s += "### Other plugins:\n";
         for sk in &other_skills {
-            s += &format!("- `/{name}` — {desc}\n", name = sk.name, desc = truncate_desc(&sk.description, 80));
+            s += &format!(
+                "- `/{name}` — {desc}\n",
+                name = sk.name,
+                desc = truncate_desc(&sk.description, 80)
+            );
         }
         s += "\n";
     }
@@ -364,6 +389,9 @@ mod tests {
     #[test]
     fn test_truncate_desc() {
         assert_eq!(truncate_desc("short", 10), "short");
-        assert_eq!(truncate_desc("this is a long description", 15), "this is a lo...");
+        assert_eq!(
+            truncate_desc("this is a long description", 15),
+            "this is a lo..."
+        );
     }
 }

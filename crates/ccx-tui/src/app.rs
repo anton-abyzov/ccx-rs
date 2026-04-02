@@ -1,12 +1,12 @@
+use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
-use ratatui::Frame;
 
-use crate::chat::{render_chat, ChatMessage};
-use crate::input::{render_input, InputState};
+use crate::chat::{ChatMessage, render_chat};
+use crate::input::{InputState, render_input};
 use crate::style::Theme;
-use crate::welcome::{render_welcome, WelcomeInfo};
+use crate::welcome::{WelcomeInfo, render_welcome};
 
 /// Which screen the app is showing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,7 +64,7 @@ pub fn render(frame: &mut Frame, app: &App) {
     // Title bar at the top.
     let chunks = Layout::vertical([
         Constraint::Length(1), // Title bar
-        Constraint::Min(5),   // Main content
+        Constraint::Min(5),    // Main content
         Constraint::Length(2), // Input area (separator + input line)
         Constraint::Length(1), // Footer
     ])
@@ -116,10 +116,7 @@ fn render_footer(frame: &mut Frame, area: Rect, model: &str) {
     };
 
     // Left side.
-    let left = Paragraph::new(Line::from(Span::styled(
-        "? for shortcuts",
-        Theme::footer(),
-    )));
+    let left = Paragraph::new(Line::from(Span::styled("? for shortcuts", Theme::footer())));
 
     // Right side.
     let right = Paragraph::new(Line::from(vec![
@@ -129,11 +126,8 @@ fn render_footer(frame: &mut Frame, area: Rect, model: &str) {
     .alignment(Alignment::Right);
 
     // Render both sides into the same area.
-    let halves = Layout::horizontal([
-        Constraint::Percentage(50),
-        Constraint::Percentage(50),
-    ])
-    .split(area);
+    let halves =
+        Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).split(area);
 
     frame.render_widget(left, halves[0]);
     frame.render_widget(right, halves[1]);

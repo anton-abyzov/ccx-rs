@@ -60,10 +60,7 @@ impl Tool for TodoWriteTool {
                 .as_str()
                 .ok_or_else(|| ToolError::InvalidInput("content is required for each todo".into()))?
                 .to_string();
-            let status = todo["status"]
-                .as_str()
-                .unwrap_or("pending")
-                .to_string();
+            let status = todo["status"].as_str().unwrap_or("pending").to_string();
 
             if !["pending", "in_progress", "completed"].contains(&status.as_str()) {
                 return Err(ToolError::InvalidInput(format!(
@@ -78,8 +75,7 @@ impl Tool for TodoWriteTool {
         let path = ctx.working_dir.join(TODO_FILE);
         let json = serde_json::to_string_pretty(&items)
             .map_err(|e| ToolError::Execution(format!("failed to serialize: {e}")))?;
-        std::fs::write(&path, &json)
-            .map_err(|e| ToolError::Io(e))?;
+        std::fs::write(&path, &json).map_err(ToolError::Io)?;
 
         // Format summary.
         let total = items.len();
@@ -115,7 +111,7 @@ struct TodoItem {
 
 /// Load existing todos from the working directory.
 #[cfg(test)]
-fn load_todos(working_dir: &std::path::PathBuf) -> Vec<TodoItem> {
+fn load_todos(working_dir: &std::path::Path) -> Vec<TodoItem> {
     let path = working_dir.join(TODO_FILE);
     if let Ok(data) = std::fs::read_to_string(&path) {
         serde_json::from_str(&data).unwrap_or_default()
@@ -218,10 +214,7 @@ mod tests {
     async fn test_todo_write_empty_list() {
         let ctx = test_ctx("empty");
         let tool = TodoWriteTool;
-        let result = tool
-            .execute(json!({"todos": []}), &ctx)
-            .await
-            .unwrap();
+        let result = tool.execute(json!({"todos": []}), &ctx).await.unwrap();
         assert!(!result.is_error);
         assert!(result.content.contains("0 todos"));
         let _ = std::fs::remove_dir_all(&ctx.working_dir);
@@ -230,7 +223,10 @@ mod tests {
     #[tokio::test]
     async fn test_todo_write_missing_array() {
         let tool = TodoWriteTool;
-        let err = tool.execute(json!({}), &test_ctx("noarr")).await.unwrap_err();
+        let err = tool
+            .execute(json!({}), &test_ctx("noarr"))
+            .await
+            .unwrap_err();
         assert!(matches!(err, ToolError::InvalidInput(_)));
     }
 

@@ -68,8 +68,7 @@ impl Tool for NotebookEditTool {
         };
 
         // Read the notebook.
-        let content = std::fs::read_to_string(&path)
-            .map_err(|e| ToolError::Io(e))?;
+        let content = std::fs::read_to_string(&path).map_err(ToolError::Io)?;
 
         let mut notebook: serde_json::Value = serde_json::from_str(&content)
             .map_err(|e| ToolError::Execution(format!("invalid notebook JSON: {e}")))?;
@@ -128,8 +127,7 @@ impl Tool for NotebookEditTool {
         // Write back.
         let output = serde_json::to_string_pretty(&notebook)
             .map_err(|e| ToolError::Execution(format!("failed to serialize: {e}")))?;
-        std::fs::write(&path, output)
-            .map_err(|e| ToolError::Io(e))?;
+        std::fs::write(&path, output).map_err(ToolError::Io)?;
 
         Ok(ToolResult {
             content: format!(

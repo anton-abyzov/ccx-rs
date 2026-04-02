@@ -53,7 +53,9 @@ impl AuthMethod {
     pub fn display_label(&self) -> &str {
         match self {
             AuthMethod::ApiKey(_) => "API Key",
-            AuthMethod::OAuthToken { subscription_type, .. } => match subscription_type.as_str() {
+            AuthMethod::OAuthToken {
+                subscription_type, ..
+            } => match subscription_type.as_str() {
                 "max" => "Claude Max",
                 "pro" => "Claude Pro",
                 "team" => "Claude Team",
@@ -107,20 +109,20 @@ pub fn resolve_auth(explicit: Option<&str>) -> Result<AuthMethod, AuthError> {
     }
 
     // 2. Environment variable.
-    if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
-        if !key.is_empty() {
-            return Ok(AuthMethod::ApiKey(ResolvedKey {
-                key,
-                source: KeySource::EnvVar,
-            }));
-        }
+    if let Ok(key) = std::env::var("ANTHROPIC_API_KEY")
+        && !key.is_empty()
+    {
+        return Ok(AuthMethod::ApiKey(ResolvedKey {
+            key,
+            source: KeySource::EnvVar,
+        }));
     }
 
     // 3. macOS Keychain OAuth token.
-    if cfg!(target_os = "macos") {
-        if let Some(oauth) = read_keychain_token() {
-            return Ok(oauth);
-        }
+    if cfg!(target_os = "macos")
+        && let Some(oauth) = read_keychain_token()
+    {
+        return Ok(oauth);
     }
 
     // 4. Credentials file OAuth token.
@@ -154,13 +156,13 @@ pub fn resolve_api_key(explicit: Option<&str>) -> Result<ResolvedKey, AuthError>
     }
 
     // 2. Environment variable.
-    if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
-        if !key.is_empty() {
-            return Ok(ResolvedKey {
-                key,
-                source: KeySource::EnvVar,
-            });
-        }
+    if let Ok(key) = std::env::var("ANTHROPIC_API_KEY")
+        && !key.is_empty()
+    {
+        return Ok(ResolvedKey {
+            key,
+            source: KeySource::EnvVar,
+        });
     }
 
     // 3. Config file.
@@ -179,7 +181,14 @@ pub fn resolve_api_key(explicit: Option<&str>) -> Result<ResolvedKey, AuthError>
 fn read_keychain_token() -> Option<AuthMethod> {
     let user = std::env::var("USER").ok()?;
     let output = std::process::Command::new("security")
-        .args(["find-generic-password", "-a", &user, "-w", "-s", "Claude Code-credentials"])
+        .args([
+            "find-generic-password",
+            "-a",
+            &user,
+            "-w",
+            "-s",
+            "Claude Code-credentials",
+        ])
         .output()
         .ok()?;
 
@@ -223,7 +232,10 @@ fn parse_oauth_json(json: &str) -> Option<AuthMethod> {
     if access_token.is_empty() {
         return None;
     }
-    Some(AuthMethod::OAuthToken { access_token, subscription_type })
+    Some(AuthMethod::OAuthToken {
+        access_token,
+        subscription_type,
+    })
 }
 
 /// Path to ~/.claude/config.json

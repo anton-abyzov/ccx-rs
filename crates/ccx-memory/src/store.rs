@@ -51,10 +51,9 @@ impl MemoryStore {
             let path = entry.path();
             if path.extension().is_some_and(|e| e == "md")
                 && path.file_name().is_some_and(|n| n != "MEMORY.md")
+                && let Ok(mem) = self.parse_file(&path)
             {
-                if let Ok(mem) = self.parse_file(&path) {
-                    entries.push(mem);
-                }
+                entries.push(mem);
             }
         }
         Ok(entries)
@@ -106,35 +105,35 @@ impl MemoryStore {
             .to_string();
 
         // Parse YAML frontmatter between --- delimiters.
-        if let Some(rest) = raw.strip_prefix("---\n") {
-            if let Some(end) = rest.find("\n---") {
-                let frontmatter = &rest[..end];
-                let content = rest[end + 4..].trim().to_string();
+        if let Some(rest) = raw.strip_prefix("---\n")
+            && let Some(end) = rest.find("\n---")
+        {
+            let frontmatter = &rest[..end];
+            let content = rest[end + 4..].trim().to_string();
 
-                let name = extract_field(frontmatter, "name");
-                let description = extract_field(frontmatter, "description");
-                let type_str = extract_field(frontmatter, "type");
+            let name = extract_field(frontmatter, "name");
+            let description = extract_field(frontmatter, "description");
+            let type_str = extract_field(frontmatter, "type");
 
-                let memory_type = match type_str.as_str() {
-                    "user" => MemoryType::User,
-                    "feedback" => MemoryType::Feedback,
-                    "project" => MemoryType::Project,
-                    "reference" => MemoryType::Reference,
-                    _ => {
-                        return Err(MemoryError::Parse(format!(
-                            "unknown memory type: {type_str}"
-                        )));
-                    }
-                };
+            let memory_type = match type_str.as_str() {
+                "user" => MemoryType::User,
+                "feedback" => MemoryType::Feedback,
+                "project" => MemoryType::Project,
+                "reference" => MemoryType::Reference,
+                _ => {
+                    return Err(MemoryError::Parse(format!(
+                        "unknown memory type: {type_str}"
+                    )));
+                }
+            };
 
-                return Ok(MemoryEntry {
-                    name,
-                    description,
-                    memory_type,
-                    content,
-                    filename,
-                });
-            }
+            return Ok(MemoryEntry {
+                name,
+                description,
+                memory_type,
+                content,
+                filename,
+            });
         }
 
         Err(MemoryError::Parse("missing frontmatter".into()))

@@ -1,7 +1,7 @@
+use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
-use ratatui::Frame;
 
 use crate::style::Theme;
 
@@ -29,11 +29,8 @@ impl Default for WelcomeInfo {
 /// Render the welcome screen into the given area.
 pub fn render_welcome(frame: &mut Frame, area: Rect, info: &WelcomeInfo) {
     // Split into left (60%) and right (40%) panels.
-    let panels = Layout::horizontal([
-        Constraint::Percentage(55),
-        Constraint::Percentage(45),
-    ])
-    .split(area);
+    let panels =
+        Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)]).split(area);
 
     render_left_panel(frame, panels[0], info);
     render_right_panel(frame, panels[1]);
@@ -73,10 +70,7 @@ fn render_left_panel(frame: &mut Frame, area: Rect, info: &WelcomeInfo) {
         ]),
         Line::from(vec![
             Span::styled("  ", Theme::welcome_info()),
-            Span::styled(
-                info.email.as_deref().unwrap_or(""),
-                Theme::welcome_info(),
-            ),
+            Span::styled(info.email.as_deref().unwrap_or(""), Theme::welcome_info()),
         ]),
         Line::from(vec![
             Span::styled("  ", Theme::welcome_info()),
@@ -134,24 +128,12 @@ fn render_right_panel(frame: &mut Frame, area: Rect) {
             " Type /help for all commands",
             Theme::panel_body(),
         )),
-        Line::from(Span::styled(
-            " Ctrl+C to quit",
-            Theme::panel_body(),
-        )),
+        Line::from(Span::styled(" Ctrl+C to quit", Theme::panel_body())),
         Line::from(""),
-        Line::from(Span::styled(
-            "─".repeat(sep_width),
-            Theme::separator(),
-        )),
+        Line::from(Span::styled("─".repeat(sep_width), Theme::separator())),
         Line::from(""),
-        Line::from(Span::styled(
-            " Recent activity",
-            Theme::panel_heading(),
-        )),
-        Line::from(Span::styled(
-            " No recent activity",
-            Theme::panel_body(),
-        )),
+        Line::from(Span::styled(" Recent activity", Theme::panel_heading())),
+        Line::from(Span::styled(" No recent activity", Theme::panel_body())),
     ];
 
     let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });

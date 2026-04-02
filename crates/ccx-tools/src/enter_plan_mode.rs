@@ -73,10 +73,7 @@ mod tests {
     async fn test_enter_plan_mode() {
         let (ctx, base) = test_ctx("enter_plan");
 
-        let result = EnterPlanModeTool
-            .execute(json!({}), &ctx)
-            .await
-            .unwrap();
+        let result = EnterPlanModeTool.execute(json!({}), &ctx).await.unwrap();
         assert!(!result.is_error);
         assert!(result.content.contains("Entered plan mode"));
         assert!(base.join(PLAN_MODE_FLAG).exists());

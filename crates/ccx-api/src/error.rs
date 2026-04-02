@@ -13,10 +13,7 @@ pub enum Error {
     Api { status: u16, body: String },
 
     #[error("API returned error event: [{error_type}] {message}")]
-    ApiEvent {
-        error_type: String,
-        message: String,
-    },
+    ApiEvent { error_type: String, message: String },
 
     #[error("request overloaded, please retry")]
     Overloaded,

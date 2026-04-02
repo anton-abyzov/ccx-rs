@@ -1,9 +1,9 @@
 use ccx_api::{
-    ApiClient, ContentBlock, Delta, InputMessage, MessageContent, MessageRequest, Role,
-    StopReason, StreamEvent, ThinkingConfig,
+    ApiClient, ContentBlock, Delta, InputMessage, MessageContent, MessageRequest, Role, StopReason,
+    StreamEvent, ThinkingConfig,
 };
-use log::{debug, error, info, trace, warn};
 use futures::StreamExt;
+use log::{debug, error, info, trace, warn};
 
 use crate::context::ToolContext;
 use crate::cost::CostTracker;
@@ -170,11 +170,7 @@ impl AgentLoop {
 
     /// Auto-compact if conversation exceeds token thresholds.
     fn maybe_compact(&mut self) {
-        let total_chars: usize = self
-            .messages
-            .iter()
-            .map(|m| Self::message_chars(m))
-            .sum();
+        let total_chars: usize = self.messages.iter().map(Self::message_chars).sum();
         let estimated_tokens = (total_chars as f64 / 3.5).ceil() as usize;
 
         if estimated_tokens > ccx_compact::DEFAULT_THRESHOLD {
@@ -190,14 +186,12 @@ impl AgentLoop {
         for msg in &mut self.messages {
             if let MessageContent::Blocks(blocks) = &mut msg.content {
                 for block in blocks {
-                    if let ContentBlock::ToolResult { content, .. } = block {
-                        if content.len() > max_chars {
-                            let total = content.len();
-                            content.truncate(200);
-                            content.push_str(&format!(
-                                "... [truncated, {total} chars total]"
-                            ));
-                        }
+                    if let ContentBlock::ToolResult { content, .. } = block
+                        && content.len() > max_chars
+                    {
+                        let total = content.len();
+                        content.truncate(200);
+                        content.push_str(&format!("... [truncated, {total} chars total]"));
                     }
                 }
             }
@@ -222,10 +216,7 @@ impl AgentLoop {
         });
 
         // If first kept message is user role, insert assistant bridge for proper alternation.
-        let first_is_user = kept.first().map_or(false, |m| match m.role {
-            Role::User => true,
-            _ => false,
-        });
+        let first_is_user = kept.first().is_some_and(|m| matches!(m.role, Role::User));
         if first_is_user {
             self.messages.push(InputMessage {
                 role: Role::Assistant,
@@ -259,7 +250,10 @@ impl AgentLoop {
         user_text: &str,
         callback: &mut dyn AgentCallback,
     ) -> Result<String, AgentLoopError> {
-        info!("Starting agent loop for user message (len: {})", user_text.len());
+        info!(
+            "Starting agent loop for user message (len: {})",
+            user_text.len()
+        );
         self.messages.push(InputMessage {
             role: Role::User,
             content: MessageContent::Text(user_text.to_string()),
@@ -299,14 +293,16 @@ impl AgentLoop {
             };
 
             // Execute with rate limit retry.
-            let stream_result =
-                self.stream_with_retry(req, callback).await?;
+            let stream_result = self.stream_with_retry(req, callback).await?;
 
             let (blocks, stop_reason, usage) = stream_result;
 
             // Record usage for this turn.
             if let Some(usage) = &usage {
-                debug!("Token usage: {} in, {} out", usage.input_tokens, usage.output_tokens);
+                debug!(
+                    "Token usage: {} in, {} out",
+                    usage.input_tokens, usage.output_tokens
+                );
                 self.cost.record(usage);
             }
 
@@ -334,9 +330,15 @@ impl AgentLoop {
                         });
                         tool_calls.push((id, name, input));
                     }
-                    PendingBlock::Thinking { text: thinking, signature } => {
+                    PendingBlock::Thinking {
+                        text: thinking,
+                        signature,
+                    } => {
                         if !thinking.is_empty() {
-                            content.push(ContentBlock::Thinking { thinking, signature });
+                            content.push(ContentBlock::Thinking {
+                                thinking,
+                                signature,
+                            });
                         }
                     }
                     PendingBlock::Other => {}
@@ -370,9 +372,12 @@ impl AgentLoop {
                 }
 
                 // Phase 2: Execute all approved tools in parallel.
-                let futures: Vec<_> = approved.iter().map(|(_, name, input)| {
-                    self.registry.execute(name, input.clone(), &self.context)
-                }).collect();
+                let futures: Vec<_> = approved
+                    .iter()
+                    .map(|(_, name, input)| {
+                        self.registry.execute(name, input.clone(), &self.context)
+                    })
+                    .collect();
                 let exec_results = futures::future::join_all(futures).await;
 
                 // Phase 3: Collect results and fire callbacks.
@@ -446,7 +451,10 @@ impl AgentLoop {
         ),
         AgentLoopError,
     > {
-        debug!("Starting stream_with_retry (max_retries: {})", self.retry_config.max_retries);
+        debug!(
+            "Starting stream_with_retry (max_retries: {})",
+            self.retry_config.max_retries
+        );
         let mut attempt = 0;
 
         loop {
@@ -457,9 +465,14 @@ impl AgentLoop {
                 }
                 Err(ccx_api::Error::RateLimit { retry_after_secs }) => {
                     attempt += 1;
-                    warn!("Rate limited (attempt {}/{}): retry after {}s", 
-                          attempt, self.retry_config.max_retries, 
-                          retry_after_secs.map(|s| s.to_string()).unwrap_or_else(|| "unknown".to_string()));
+                    warn!(
+                        "Rate limited (attempt {}/{}): retry after {}s",
+                        attempt,
+                        self.retry_config.max_retries,
+                        retry_after_secs
+                            .map(|s| s.to_string())
+                            .unwrap_or_else(|| "unknown".to_string())
+                    );
                     if attempt > self.retry_config.max_retries {
                         error!("Rate limit exhausted after {} attempts", attempt);
                         return Err(AgentLoopError::RateLimitExhausted(attempt));
@@ -469,26 +482,20 @@ impl AgentLoop {
                         secs * 1000
                     } else {
                         // Exponential backoff with jitter.
-                        let base = self.retry_config.base_delay_ms
-                            * 2u64.pow(attempt - 1);
+                        let base = self.retry_config.base_delay_ms * 2u64.pow(attempt - 1);
                         base.min(self.retry_config.max_delay_ms)
                     };
 
-                    callback.on_retry(
-                        attempt,
-                        delay_ms,
-                        "rate limited",
-                    );
+                    callback.on_retry(attempt, delay_ms, "rate limited");
                     debug!("Sleeping for {}ms before retry", delay_ms);
-                    tokio::time::sleep(
-                        std::time::Duration::from_millis(delay_ms),
-                    )
-                    .await;
+                    tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
                 }
                 Err(ccx_api::Error::Overloaded) => {
                     attempt += 1;
-                    warn!("API overloaded (attempt {}/{}): backing off", 
-                          attempt, self.retry_config.max_retries);
+                    warn!(
+                        "API overloaded (attempt {}/{}): backing off",
+                        attempt, self.retry_config.max_retries
+                    );
                     if attempt > self.retry_config.max_retries {
                         error!("API overloaded after max retries");
                         return Err(AgentLoopError::Api(
@@ -496,17 +503,12 @@ impl AgentLoop {
                         ));
                     }
 
-                    let delay_ms = self.retry_config.base_delay_ms
-                        * 2u64.pow(attempt - 1);
-                    let delay_ms =
-                        delay_ms.min(self.retry_config.max_delay_ms);
+                    let delay_ms = self.retry_config.base_delay_ms * 2u64.pow(attempt - 1);
+                    let delay_ms = delay_ms.min(self.retry_config.max_delay_ms);
 
                     callback.on_retry(attempt, delay_ms, "overloaded");
                     debug!("Sleeping for {}ms before retry", delay_ms);
-                    tokio::time::sleep(
-                        std::time::Duration::from_millis(delay_ms),
-                    )
-                    .await;
+                    tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
                 }
                 Err(e) => {
                     error!("API error: {}", e);
@@ -520,11 +522,7 @@ impl AgentLoop {
     async fn consume_stream(
         &self,
         mut stream: std::pin::Pin<
-            Box<
-                dyn futures::Stream<
-                        Item = Result<StreamEvent, ccx_api::Error>,
-                    > + Send,
-            >,
+            Box<dyn futures::Stream<Item = Result<StreamEvent, ccx_api::Error>> + Send>,
         >,
         callback: &mut dyn AgentCallback,
     ) -> Result<
@@ -544,8 +542,7 @@ impl AgentLoop {
         let mut thinking_chunks = 0;
 
         while let Some(event) = stream.next().await {
-            let event =
-                event.map_err(|e| AgentLoopError::Api(e.to_string()))?;
+            let event = event.map_err(|e| AgentLoopError::Api(e.to_string()))?;
             match event {
                 StreamEvent::ContentBlockStart {
                     index,
@@ -561,13 +558,21 @@ impl AgentLoop {
                         }
                         ContentBlock::Thinking { thinking, .. } => {
                             if !thinking.is_empty() {
-                                debug!("Thinking block started (index {}): {}...", index, &thinking[..50.min(thinking.len())]);
+                                debug!(
+                                    "Thinking block started (index {}): {}...",
+                                    index,
+                                    &thinking[..50.min(thinking.len())]
+                                );
                                 thinking_chunks += 1;
                             }
                         }
                         ContentBlock::Text { text } => {
                             if !text.is_empty() {
-                                debug!("Text block started (index {}): {}...", index, &text[..50.min(text.len())]);
+                                debug!(
+                                    "Text block started (index {}): {}...",
+                                    index,
+                                    &text[..50.min(text.len())]
+                                );
                                 text_chunks += 1;
                             }
                         }
@@ -575,26 +580,22 @@ impl AgentLoop {
                     }
                     blocks[index] = match content_block {
                         ContentBlock::Text { text } => PendingBlock::Text(text),
-                        ContentBlock::ToolUse { id, name, .. } => {
-                            PendingBlock::ToolUse {
-                                id,
-                                name,
-                                json_buf: String::new(),
-                            }
-                        }
-                        ContentBlock::Thinking { thinking, .. } => {
-                            PendingBlock::Thinking { text: thinking, signature: None }
-                        }
+                        ContentBlock::ToolUse { id, name, .. } => PendingBlock::ToolUse {
+                            id,
+                            name,
+                            json_buf: String::new(),
+                        },
+                        ContentBlock::Thinking { thinking, .. } => PendingBlock::Thinking {
+                            text: thinking,
+                            signature: None,
+                        },
                         _ => PendingBlock::Other,
                     };
                 }
                 StreamEvent::ContentBlockDelta { index, delta } => {
                     if index < blocks.len() {
                         match (&mut blocks[index], delta) {
-                            (
-                                PendingBlock::Text(buf),
-                                Delta::TextDelta { text },
-                            ) => {
+                            (PendingBlock::Text(buf), Delta::TextDelta { text }) => {
                                 if !text.is_empty() {
                                     trace!("Text delta: {}...", &text[..20.min(text.len())]);
                                     buf.push_str(&text);
@@ -606,7 +607,10 @@ impl AgentLoop {
                                 Delta::InputJsonDelta { partial_json },
                             ) => {
                                 if !partial_json.is_empty() {
-                                    trace!("Tool input delta: {}...", &partial_json[..20.min(partial_json.len())]);
+                                    trace!(
+                                        "Tool input delta: {}...",
+                                        &partial_json[..20.min(partial_json.len())]
+                                    );
                                     json_buf.push_str(&partial_json);
                                 }
                             }
@@ -615,7 +619,10 @@ impl AgentLoop {
                                 Delta::ThinkingDelta { thinking },
                             ) => {
                                 if !thinking.is_empty() {
-                                    trace!("Thinking delta: {}...", &thinking[..20.min(thinking.len())]);
+                                    trace!(
+                                        "Thinking delta: {}...",
+                                        &thinking[..20.min(thinking.len())]
+                                    );
                                     buf.push_str(&thinking);
                                     callback.on_thinking(&thinking);
                                 }
@@ -653,8 +660,10 @@ impl AgentLoop {
             }
         }
 
-        debug!("Stream consumed: {} text chunks, {} tool calls, {} thinking chunks", 
-               text_chunks, tool_calls_started, thinking_chunks);
+        debug!(
+            "Stream consumed: {} text chunks, {} tool calls, {} thinking chunks",
+            text_chunks, tool_calls_started, thinking_chunks
+        );
         Ok((blocks, stop_reason, usage))
     }
 }

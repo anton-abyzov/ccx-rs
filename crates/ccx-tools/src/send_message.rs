@@ -98,8 +98,8 @@ impl Tool for SendMessageTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::meta_helpers::{cleanup, test_ctx};
     use crate::TeamCreateTool;
+    use crate::meta_helpers::{cleanup, test_ctx};
 
     async fn setup_team(ctx: &ToolContext) {
         TeamCreateTool

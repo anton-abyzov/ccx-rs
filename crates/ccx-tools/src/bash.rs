@@ -51,10 +51,7 @@ impl Tool for BashTool {
             .as_str()
             .ok_or_else(|| ToolError::InvalidInput("command is required".into()))?;
 
-        let timeout_ms = input["timeout"]
-            .as_u64()
-            .unwrap_or(120_000)
-            .min(600_000);
+        let timeout_ms = input["timeout"].as_u64().unwrap_or(120_000).min(600_000);
 
         let run_in_background = input["run_in_background"].as_bool().unwrap_or(false);
 
@@ -90,7 +87,10 @@ impl Tool for BashTool {
         cmd.current_dir(&ctx.working_dir)
             .env("HOME", std::env::var("HOME").unwrap_or_default())
             .env("PATH", std::env::var("PATH").unwrap_or_default())
-            .env("TERM", std::env::var("TERM").unwrap_or_else(|_| "xterm-256color".into()));
+            .env(
+                "TERM",
+                std::env::var("TERM").unwrap_or_else(|_| "xterm-256color".into()),
+            );
 
         // Propagate common environment variables if set.
         for var in &[
@@ -136,9 +136,7 @@ impl Tool for BashTool {
         // Execute with timeout.
         let output = tokio::time::timeout(Duration::from_millis(timeout_ms), cmd.output())
             .await
-            .map_err(|_| {
-                ToolError::Timeout(timeout_ms)
-            })?
+            .map_err(|_| ToolError::Timeout(timeout_ms))?
             .map_err(ToolError::Io)?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -230,10 +228,7 @@ mod tests {
     async fn test_bash_stderr() {
         let tool = BashTool;
         let result = tool
-            .execute(
-                json!({"command": "echo out; echo err >&2"}),
-                &test_ctx(),
-            )
+            .execute(json!({"command": "echo out; echo err >&2"}), &test_ctx())
             .await
             .unwrap();
         assert!(result.content.contains("out"));
@@ -247,10 +242,7 @@ mod tests {
 
         let tool = BashTool;
         let ctx = ToolContext::new(dir.clone());
-        let result = tool
-            .execute(json!({"command": "pwd"}), &ctx)
-            .await
-            .unwrap();
+        let result = tool.execute(json!({"command": "pwd"}), &ctx).await.unwrap();
         assert!(result.content.contains(&dir.to_string_lossy().to_string()));
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -260,10 +252,7 @@ mod tests {
     async fn test_bash_timeout() {
         let tool = BashTool;
         let err = tool
-            .execute(
-                json!({"command": "sleep 10", "timeout": 100}),
-                &test_ctx(),
-            )
+            .execute(json!({"command": "sleep 10", "timeout": 100}), &test_ctx())
             .await
             .unwrap_err();
         assert!(matches!(err, ToolError::Timeout(_)));
@@ -294,10 +283,7 @@ mod tests {
     async fn test_bash_pipe_command() {
         let tool = BashTool;
         let result = tool
-            .execute(
-                json!({"command": "echo hello world | wc -w"}),
-                &test_ctx(),
-            )
+            .execute(json!({"command": "echo hello world | wc -w"}), &test_ctx())
             .await
             .unwrap();
         assert!(result.content.trim().contains("2"));
@@ -307,10 +293,7 @@ mod tests {
     async fn test_bash_env_propagation() {
         let tool = BashTool;
         let result = tool
-            .execute(
-                json!({"command": "echo $HOME"}),
-                &test_ctx(),
-            )
+            .execute(json!({"command": "echo $HOME"}), &test_ctx())
             .await
             .unwrap();
         // HOME should be set and non-empty.

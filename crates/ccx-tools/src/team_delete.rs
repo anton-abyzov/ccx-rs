@@ -69,8 +69,8 @@ impl Tool for TeamDeleteTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::meta_helpers::{cleanup, test_ctx};
     use crate::TeamCreateTool;
+    use crate::meta_helpers::{cleanup, test_ctx};
 
     #[tokio::test]
     async fn test_delete_basic() {

@@ -116,7 +116,11 @@ mod tests {
         assert_eq!(skills.len(), 5);
         assert_eq!(skills[0].name, "simplify");
         assert_eq!(skills[4].name, "test");
-        assert!(skills.iter().all(|s| s.source_path.to_str() == Some("<builtin>")));
+        assert!(
+            skills
+                .iter()
+                .all(|s| s.source_path.to_str() == Some("<builtin>"))
+        );
     }
 
     #[test]

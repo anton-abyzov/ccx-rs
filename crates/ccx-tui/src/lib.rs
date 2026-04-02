@@ -5,7 +5,7 @@ pub mod input;
 pub mod style;
 pub mod welcome;
 
-pub use app::{render, App, Screen};
+pub use app::{App, Screen, render};
 pub use chat::{ChatMessage, ChatRole};
 pub use input::InputState;
 pub use welcome::WelcomeInfo;
@@ -17,8 +17,8 @@ use std::time::Duration;
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{cursor, execute};
-use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
+use ratatui::backend::CrosstermBackend;
 
 /// Events that can be pushed into the TUI from the agent loop.
 #[derive(Debug, Clone)]
@@ -111,12 +111,12 @@ fn run_event_loop(
                         app.enter_chat();
                     }
                     // Append to the last assistant message, or create one.
-                    if let Some(last) = app.messages.last_mut() {
-                        if last.role == ChatRole::Assistant {
-                            last.content.push_str(&text);
-                            auto_scroll(app);
-                            continue;
-                        }
+                    if let Some(last) = app.messages.last_mut()
+                        && last.role == ChatRole::Assistant
+                    {
+                        last.content.push_str(&text);
+                        auto_scroll(app);
+                        continue;
                     }
                     app.messages.push(ChatMessage {
                         role: ChatRole::Assistant,
@@ -173,95 +173,95 @@ fn run_event_loop(
         }
 
         // Poll for keyboard events with short timeout for responsive UI.
-        if event::poll(Duration::from_millis(50))? {
-            if let Event::Key(key) = event::read()? {
-                match key.code {
-                    // Ctrl+C: quit.
-                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        let _ = input_tx.send(TuiInput::Quit);
-                        app.should_quit = true;
-                    }
-
-                    // Ctrl+D: quit if input is empty.
-                    KeyCode::Char('d')
-                        if key.modifiers.contains(KeyModifiers::CONTROL)
-                            && app.input.text.is_empty() =>
-                    {
-                        let _ = input_tx.send(TuiInput::Quit);
-                        app.should_quit = true;
-                    }
-
-                    // Enter: submit input.
-                    KeyCode::Enter => {
-                        let text = app.input.clear();
-                        if !text.is_empty() {
-                            // Transition to chat on first user input.
-                            if app.screen == Screen::Welcome {
-                                app.enter_chat();
-                            }
-                            app.messages.push(ChatMessage {
-                                role: ChatRole::User,
-                                content: text.clone(),
-                            });
-                            auto_scroll(app);
-                            let _ = input_tx.send(TuiInput::Message(text));
-                        }
-                    }
-
-                    // Backspace.
-                    KeyCode::Backspace => {
-                        app.input.backspace();
-                    }
-
-                    // Delete: remove char at cursor.
-                    KeyCode::Delete => {
-                        if app.input.cursor_pos < app.input.text.len() {
-                            app.input.text.remove(app.input.cursor_pos);
-                        }
-                    }
-
-                    // Arrow keys.
-                    KeyCode::Left => app.input.move_left(),
-                    KeyCode::Right => app.input.move_right(),
-                    KeyCode::Up => app.scroll_up(),
-                    KeyCode::Down => app.scroll_down(),
-
-                    // Home/End for input cursor.
-                    KeyCode::Home => app.input.cursor_pos = 0,
-                    KeyCode::End => app.input.cursor_pos = app.input.text.len(),
-
-                    // PageUp/PageDown for scrolling.
-                    KeyCode::PageUp => {
-                        for _ in 0..10 {
-                            app.scroll_up();
-                        }
-                    }
-                    KeyCode::PageDown => {
-                        for _ in 0..10 {
-                            app.scroll_down();
-                        }
-                    }
-
-                    // Ctrl+L: clear screen (re-render).
-                    KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        terminal.clear()?;
-                    }
-
-                    // Ctrl+U: clear input line.
-                    KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        app.input.clear();
-                    }
-
-                    // Regular character input.
-                    KeyCode::Char(c) => {
-                        app.input.insert(c);
-                    }
-
-                    // Tab: could be used for completion in the future.
-                    KeyCode::Tab => {}
-
-                    _ => {}
+        if event::poll(Duration::from_millis(50))?
+            && let Event::Key(key) = event::read()?
+        {
+            match key.code {
+                // Ctrl+C: quit.
+                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    let _ = input_tx.send(TuiInput::Quit);
+                    app.should_quit = true;
                 }
+
+                // Ctrl+D: quit if input is empty.
+                KeyCode::Char('d')
+                    if key.modifiers.contains(KeyModifiers::CONTROL)
+                        && app.input.text.is_empty() =>
+                {
+                    let _ = input_tx.send(TuiInput::Quit);
+                    app.should_quit = true;
+                }
+
+                // Enter: submit input.
+                KeyCode::Enter => {
+                    let text = app.input.clear();
+                    if !text.is_empty() {
+                        // Transition to chat on first user input.
+                        if app.screen == Screen::Welcome {
+                            app.enter_chat();
+                        }
+                        app.messages.push(ChatMessage {
+                            role: ChatRole::User,
+                            content: text.clone(),
+                        });
+                        auto_scroll(app);
+                        let _ = input_tx.send(TuiInput::Message(text));
+                    }
+                }
+
+                // Backspace.
+                KeyCode::Backspace => {
+                    app.input.backspace();
+                }
+
+                // Delete: remove char at cursor.
+                KeyCode::Delete => {
+                    if app.input.cursor_pos < app.input.text.len() {
+                        app.input.text.remove(app.input.cursor_pos);
+                    }
+                }
+
+                // Arrow keys.
+                KeyCode::Left => app.input.move_left(),
+                KeyCode::Right => app.input.move_right(),
+                KeyCode::Up => app.scroll_up(),
+                KeyCode::Down => app.scroll_down(),
+
+                // Home/End for input cursor.
+                KeyCode::Home => app.input.cursor_pos = 0,
+                KeyCode::End => app.input.cursor_pos = app.input.text.len(),
+
+                // PageUp/PageDown for scrolling.
+                KeyCode::PageUp => {
+                    for _ in 0..10 {
+                        app.scroll_up();
+                    }
+                }
+                KeyCode::PageDown => {
+                    for _ in 0..10 {
+                        app.scroll_down();
+                    }
+                }
+
+                // Ctrl+L: clear screen (re-render).
+                KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    terminal.clear()?;
+                }
+
+                // Ctrl+U: clear input line.
+                KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    app.input.clear();
+                }
+
+                // Regular character input.
+                KeyCode::Char(c) => {
+                    app.input.insert(c);
+                }
+
+                // Tab: could be used for completion in the future.
+                KeyCode::Tab => {}
+
+                _ => {}
             }
         }
     }

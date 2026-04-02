@@ -89,10 +89,7 @@ mod tests {
     #[test]
     fn test_rule_ask_no_match() {
         let rules = RuleSet::new();
-        assert_eq!(
-            rules.evaluate("Bash(echo hello)"),
-            PermissionDecision::Ask
-        );
+        assert_eq!(rules.evaluate("Bash(echo hello)"), PermissionDecision::Ask);
     }
 
     #[test]
@@ -100,10 +97,7 @@ mod tests {
         let mut rules = RuleSet::new();
         rules.add("Bash(git *)", RuleEffect::Allow);
         rules.add("Bash(*)", RuleEffect::Deny);
-        assert_eq!(
-            rules.evaluate("Bash(git push)"),
-            PermissionDecision::Allow
-        );
+        assert_eq!(rules.evaluate("Bash(git push)"), PermissionDecision::Allow);
         assert_eq!(rules.evaluate("Bash(ls)"), PermissionDecision::Deny);
     }
 }

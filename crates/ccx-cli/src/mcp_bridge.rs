@@ -56,9 +56,7 @@ impl Tool for McpToolBridge {
                             .join("\n")
                     })
                     .filter(|s| !s.is_empty())
-                    .unwrap_or_else(|| {
-                        serde_json::to_string_pretty(&result).unwrap_or_default()
-                    });
+                    .unwrap_or_else(|| serde_json::to_string_pretty(&result).unwrap_or_default());
                 let is_error = result
                     .get("isError")
                     .and_then(|e| e.as_bool())

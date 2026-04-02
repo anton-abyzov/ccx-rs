@@ -195,12 +195,11 @@ pub fn discover_all_skills() -> Vec<Skill> {
                 let subdir = entry.path();
                 if subdir.is_dir() {
                     let skill_file = subdir.join("SKILL.md");
-                    if skill_file.exists() {
-                        if let Ok(skill) = load_skill(&skill_file) {
-                            if seen_names.insert(skill.name.clone()) {
-                                skills.push(skill);
-                            }
-                        }
+                    if skill_file.exists()
+                        && let Ok(skill) = load_skill(&skill_file)
+                        && seen_names.insert(skill.name.clone())
+                    {
+                        skills.push(skill);
                     }
                 }
             }
@@ -239,12 +238,11 @@ fn scan_plugin_skills(
         };
         for entry in entries.flatten() {
             let skill_file = entry.path().join("SKILL.md");
-            if skill_file.exists() {
-                if let Ok(skill) = load_skill(&skill_file) {
-                    if seen.insert(skill.name.clone()) {
-                        skills.push(skill);
-                    }
-                }
+            if skill_file.exists()
+                && let Ok(skill) = load_skill(&skill_file)
+                && seen.insert(skill.name.clone())
+            {
+                skills.push(skill);
             }
         }
     }

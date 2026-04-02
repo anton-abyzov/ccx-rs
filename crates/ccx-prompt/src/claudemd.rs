@@ -17,13 +17,13 @@ pub fn discover_claude_md(start_dir: &Path) -> Vec<ClaudeMdFile> {
 
     while let Some(dir) = current {
         let candidate = dir.join("CLAUDE.md");
-        if candidate.is_file() {
-            if let Ok(content) = fs::read_to_string(&candidate) {
-                files.push(ClaudeMdFile {
-                    path: candidate,
-                    content,
-                });
-            }
+        if candidate.is_file()
+            && let Ok(content) = fs::read_to_string(&candidate)
+        {
+            files.push(ClaudeMdFile {
+                path: candidate,
+                content,
+            });
         }
         current = dir.parent().map(|p| p.to_path_buf());
     }
@@ -31,13 +31,14 @@ pub fn discover_claude_md(start_dir: &Path) -> Vec<ClaudeMdFile> {
     // Also check ~/.claude/CLAUDE.md
     if let Some(home) = home_dir() {
         let global = home.join(".claude").join("CLAUDE.md");
-        if global.is_file() && !files.iter().any(|f| f.path == global) {
-            if let Ok(content) = fs::read_to_string(&global) {
-                files.push(ClaudeMdFile {
-                    path: global,
-                    content,
-                });
-            }
+        if global.is_file()
+            && !files.iter().any(|f| f.path == global)
+            && let Ok(content) = fs::read_to_string(&global)
+        {
+            files.push(ClaudeMdFile {
+                path: global,
+                content,
+            });
         }
     }
 

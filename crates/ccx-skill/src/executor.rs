@@ -30,9 +30,7 @@ pub fn find_skill<'a>(skills: &'a [Skill], query: &str) -> Option<&'a Skill> {
         return Some(skill);
     }
     // Then try trigger keywords.
-    skills
-        .iter()
-        .find(|s| s.trigger.iter().any(|t| t == query))
+    skills.iter().find(|s| s.trigger.iter().any(|t| t == query))
 }
 
 #[cfg(test)]

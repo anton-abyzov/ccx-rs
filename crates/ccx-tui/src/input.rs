@@ -1,7 +1,7 @@
+use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
-use ratatui::Frame;
 
 use crate::style::Theme;
 
@@ -87,11 +87,7 @@ pub fn render_input(frame: &mut Frame, area: Rect, state: &InputState) {
     }
 
     // Input line below the separator.
-    let input_y = if area.height >= 2 {
-        area.y + 1
-    } else {
-        area.y
-    };
+    let input_y = if area.height >= 2 { area.y + 1 } else { area.y };
     let input_area = Rect {
         x: area.x,
         y: input_y,

@@ -3,8 +3,10 @@ use serde::{Deserialize, Serialize};
 /// Permission modes controlling how tool calls are authorized.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[derive(Default)]
 pub enum PermissionMode {
     /// Default: prompt for unrecognized tools.
+    #[default]
     Default,
     /// Plan mode: read-only tools allowed, writes require approval.
     Plan,
@@ -16,12 +18,6 @@ pub enum PermissionMode {
     AcceptEdits,
     /// Full auto mode: allow everything.
     Auto,
-}
-
-impl Default for PermissionMode {
-    fn default() -> Self {
-        Self::Default
-    }
 }
 
 impl PermissionMode {
@@ -37,7 +33,10 @@ impl PermissionMode {
 
     /// Whether this mode auto-allows file edits without prompting.
     pub fn allows_edits(&self) -> bool {
-        matches!(self, Self::BypassPermissions | Self::AcceptEdits | Self::Auto)
+        matches!(
+            self,
+            Self::BypassPermissions | Self::AcceptEdits | Self::Auto
+        )
     }
 
     /// Whether this mode auto-allows bash commands without prompting.

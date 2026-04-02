@@ -53,7 +53,7 @@ impl Tool for ExitPlanModeTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::enter_plan_mode::{is_plan_mode, EnterPlanModeTool};
+    use crate::enter_plan_mode::{EnterPlanModeTool, is_plan_mode};
     use crate::meta_helpers::{cleanup, test_ctx};
 
     #[tokio::test]

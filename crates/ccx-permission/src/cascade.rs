@@ -96,9 +96,6 @@ mod tests {
         let (_, rules) = merge_cascade(&layers);
         // Deny rules from earlier layer come first; but here deny is from layer 2.
         // The actual ordering: deny "Bash(rm *)" then allow "Bash(git *)".
-        assert_eq!(
-            rules.evaluate("Bash(rm -rf /)"),
-            PermissionDecision::Deny
-        );
+        assert_eq!(rules.evaluate("Bash(rm -rf /)"), PermissionDecision::Deny);
     }
 }

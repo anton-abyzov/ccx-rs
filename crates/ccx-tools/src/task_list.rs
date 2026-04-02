@@ -86,10 +86,7 @@ impl Tool for TaskListTool {
                 "in_progress" => "[-]",
                 _ => "[ ]",
             };
-            let owner = task
-                .owner
-                .as_deref()
-                .unwrap_or("unassigned");
+            let owner = task.owner.as_deref().unwrap_or("unassigned");
             output.push_str(&format!(
                 "{icon} #{}: {} ({})\n",
                 task.id, task.subject, owner
@@ -127,7 +124,10 @@ mod tests {
             .await
             .unwrap();
         TaskCreateTool
-            .execute(json!({"subject": "Task B", "status": "in_progress", "owner": "bob"}), ctx)
+            .execute(
+                json!({"subject": "Task B", "status": "in_progress", "owner": "bob"}),
+                ctx,
+            )
             .await
             .unwrap();
         TaskCreateTool

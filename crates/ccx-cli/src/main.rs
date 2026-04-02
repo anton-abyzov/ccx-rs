@@ -8,8 +8,8 @@ use std::io::Write;
 use std::sync::mpsc;
 
 use clap::{Parser, Subcommand};
-use rustyline::error::ReadlineError;
 use rustyline::Editor;
+use rustyline::error::ReadlineError;
 
 /// ccx — Claude Code in Rust
 #[derive(Parser)]
@@ -23,7 +23,6 @@ struct Cli {
     log_level: String,
 
     // ── Top-level flags forwarded to Chat when no subcommand given ──
-
     /// Model to use
     #[arg(long, global = true)]
     model: Option<String>,
@@ -58,6 +57,7 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+#[allow(clippy::large_enum_variant)]
 enum Commands {
     /// Start an interactive chat session
     Chat {
@@ -272,7 +272,9 @@ fn print_info() {
     println!("  ccx-api        - Claude API client with streaming");
     println!("  ccx-auth       - API key resolution");
     println!("  ccx-core       - Agent loop, tools, hooks, cost tracking");
-    println!("  ccx-tools      - Built-in tools (Bash, Read, Write, Edit, Glob, Grep, WebFetch, WebSearch, Agent, TodoWrite, NotebookEdit)");
+    println!(
+        "  ccx-tools      - Built-in tools (Bash, Read, Write, Edit, Glob, Grep, WebFetch, WebSearch, Agent, TodoWrite, NotebookEdit)"
+    );
     println!("  ccx-prompt     - System prompt + CLAUDE.md");
     println!("  ccx-permission - Permission modes and rules");
     println!("  ccx-config     - Settings loading");
@@ -295,6 +297,7 @@ fn effort_config(effort: &str) -> (u32, bool, u32) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_chat(
     model: &str,
     explicit_key: Option<&str>,
@@ -321,29 +324,27 @@ async fn run_chat(
     // Resolve client based on provider.
     let or_key_env = std::env::var("OPENROUTER_API_KEY").ok();
 
-    let (client, auth_source, email): (ccx_api::ApiClient, String, Option<String>) =
-        match provider {
-            "openrouter" => {
-                let key = openrouter_key
-                    .or(or_key_env.as_deref())
-                    .ok_or("OpenRouter API key required: set OPENROUTER_API_KEY or use --openrouter-key")?;
-                let client =
-                    ccx_api::ApiClient::OpenAi(ccx_api::OpenAiClient::openrouter(key, model));
-                (client, "OpenRouter".to_string(), None)
-            }
-            _ => {
-                let auth = ccx_auth::resolve_auth(explicit_key)?;
-                let email = if let Some(token) = auth.oauth_token() {
-                    ccx_auth::fetch_oauth_email(token).await
-                } else {
-                    None
-                };
-                let client =
-                    ccx_api::ApiClient::Claude(ccx_api::ClaudeClient::with_auth(&auth, model));
-                let auth_source = auth.display_label().to_string();
-                (client, auth_source, email)
-            }
-        };
+    let (client, auth_source, email): (ccx_api::ApiClient, String, Option<String>) = match provider
+    {
+        "openrouter" => {
+            let key = openrouter_key.or(or_key_env.as_deref()).ok_or(
+                "OpenRouter API key required: set OPENROUTER_API_KEY or use --openrouter-key",
+            )?;
+            let client = ccx_api::ApiClient::OpenAi(ccx_api::OpenAiClient::openrouter(key, model));
+            (client, "OpenRouter".to_string(), None)
+        }
+        _ => {
+            let auth = ccx_auth::resolve_auth(explicit_key)?;
+            let email = if let Some(token) = auth.oauth_token() {
+                ccx_auth::fetch_oauth_email(token).await
+            } else {
+                None
+            };
+            let client = ccx_api::ApiClient::Claude(ccx_api::ClaudeClient::with_auth(&auth, model));
+            let auth_source = auth.display_label().to_string();
+            (client, auth_source, email)
+        }
+    };
 
     // Load settings.
     let settings = ccx_config::load_default_settings().unwrap_or_default();
@@ -356,7 +357,10 @@ async fn run_chat(
         "acceptedits" => ccx_permission::PermissionMode::AcceptEdits,
         "auto" => ccx_permission::PermissionMode::Auto,
         "default" => ccx_permission::PermissionMode::Default,
-        _ => settings.permissions.mode.unwrap_or(ccx_permission::PermissionMode::BypassPermissions),
+        _ => settings
+            .permissions
+            .mode
+            .unwrap_or(ccx_permission::PermissionMode::BypassPermissions),
     };
 
     // Bypass permissions when flag is set or mode allows it.
@@ -419,14 +423,18 @@ async fn run_chat(
         .join(".claude")
         .join("memory");
     let memory_store = ccx_memory::MemoryStore::new(memory_dir);
-    if let Ok(index) = memory_store.load_index() {
-        if !index.is_empty() {
-            system_prompt.push_str("\n\n# Memories\n\n");
-            system_prompt.push_str(&index);
-        }
+    if let Ok(index) = memory_store.load_index()
+        && !index.is_empty()
+    {
+        system_prompt.push_str("\n\n# Memories\n\n");
+        system_prompt.push_str(&index);
     }
 
-    let tool_names: Vec<String> = registry.names().into_iter().map(|s| s.to_string()).collect();
+    let tool_names: Vec<String> = registry
+        .names()
+        .into_iter()
+        .map(|s| s.to_string())
+        .collect();
     let tool_count = tool_names.len();
 
     // Wire sandbox: set sandboxed flag on tool context when --sandbox is used.
@@ -443,8 +451,8 @@ async fn run_chat(
     agent.set_max_tokens(effort_tokens);
 
     // Thinking: effort level provides defaults, explicit flags override.
-    let thinking_enabled = provider == "anthropic" && !no_thinking
-        && (effort_thinking || thinking_budget > 0);
+    let thinking_enabled =
+        provider == "anthropic" && !no_thinking && (effort_thinking || thinking_budget > 0);
     let final_budget = if no_thinking || thinking_budget == 0 {
         0
     } else if thinking_budget != 10000 {
@@ -498,9 +506,30 @@ async fn run_chat(
         let cwd_display = shorten_home(&cwd);
 
         if use_tui {
-            run_tui_mode(&mut agent, model, &auth_source, &cwd_display, tool_count, email.as_deref()).await?;
+            run_tui_mode(
+                &mut agent,
+                model,
+                &auth_source,
+                &cwd_display,
+                tool_count,
+                email.as_deref(),
+            )
+            .await?;
         } else {
-            run_inline_mode(&mut agent, model, &auth_source, &cwd_display, &tool_names, bypass_permissions, email.as_deref(), show_thinking, resume_id, continue_session, effort).await?;
+            run_inline_mode(
+                &mut agent,
+                model,
+                &auth_source,
+                &cwd_display,
+                &tool_names,
+                bypass_permissions,
+                email.as_deref(),
+                show_thinking,
+                resume_id,
+                continue_session,
+                effort,
+            )
+            .await?;
         }
     }
 
@@ -602,7 +631,11 @@ impl ccx_core::AgentCallback for StreamJsonCallback {
         let j = serde_json::json!({"type": "tool_start", "name": name, "input": input});
         println!("{}", serde_json::to_string(&j).unwrap_or_default());
     }
-    fn on_tool_end(&mut self, name: &str, result: &Result<ccx_core::ToolResult, ccx_core::ToolError>) {
+    fn on_tool_end(
+        &mut self,
+        name: &str,
+        result: &Result<ccx_core::ToolResult, ccx_core::ToolError>,
+    ) {
         let (success, content) = match result {
             Ok(r) => (!r.is_error, r.content.clone()),
             Err(e) => (false, e.to_string()),
@@ -637,20 +670,12 @@ async fn run_tui_mode(
     };
 
     // Spawn TUI thread (blocking — owns the terminal).
-    let tui_handle = std::thread::spawn(move || {
-        ccx_tui::run_tui_configured(tui_rx, input_tx, welcome)
-    });
+    let tui_handle =
+        std::thread::spawn(move || ccx_tui::run_tui_configured(tui_rx, input_tx, welcome));
 
     // Agent loop: wait for user input, send to API, push events to TUI.
-    loop {
-        let user_input = match input_rx.recv() {
-            Ok(ccx_tui::TuiInput::Message(text)) => text,
-            Ok(ccx_tui::TuiInput::Quit) | Err(_) => break,
-        };
-
-        let mut cb = TuiCallback {
-            tx: tui_tx.clone(),
-        };
+    while let Ok(ccx_tui::TuiInput::Message(user_input)) = input_rx.recv() {
+        let mut cb = TuiCallback { tx: tui_tx.clone() };
 
         match agent.send_message(&user_input, &mut cb).await {
             Ok(_) => {}
@@ -708,9 +733,9 @@ impl ccx_core::AgentCallback for TuiCallback {
     }
 
     fn on_thinking(&mut self, text: &str) {
-        let _ = self.tx.send(ccx_tui::TuiEvent::StreamText(
-            format!("\x1b[2;3m{text}\x1b[0m"),
-        ));
+        let _ = self.tx.send(ccx_tui::TuiEvent::StreamText(format!(
+            "\x1b[2;3m{text}\x1b[0m"
+        )));
     }
 
     fn on_retry(&mut self, attempt: u32, delay_ms: u64, reason: &str) {
@@ -736,7 +761,10 @@ struct StreamCallback {
 
 impl StreamCallback {
     fn new(show_thinking: bool) -> Self {
-        Self { chars_printed: 0, show_thinking }
+        Self {
+            chars_printed: 0,
+            show_thinking,
+        }
     }
 }
 
@@ -805,10 +833,7 @@ fn extract_tool_detail(name: &str, input: &serde_json::Value) -> String {
                 }
             })
             .unwrap_or_default(),
-        "Read" | "Write" | "Edit" => input["file_path"]
-            .as_str()
-            .unwrap_or("")
-            .to_string(),
+        "Read" | "Write" | "Edit" => input["file_path"].as_str().unwrap_or("").to_string(),
         "Glob" => input["pattern"].as_str().unwrap_or("").to_string(),
         "Grep" => input["pattern"].as_str().unwrap_or("").to_string(),
         "WebFetch" => input["url"].as_str().unwrap_or("").to_string(),
@@ -968,6 +993,7 @@ fn resolve_model_name(name: &str) -> &str {
 }
 
 /// Run inline interactive mode (default — no full-screen).
+#[allow(clippy::too_many_arguments)]
 async fn run_inline_mode(
     agent: &mut ccx_core::AgentLoop,
     model: &str,
@@ -1013,9 +1039,7 @@ async fn run_inline_mode(
         .collect();
 
     // Load persistent history.
-    let history_path = dirs::home_dir()
-        .unwrap_or_default()
-        .join(".ccx_history");
+    let history_path = dirs::home_dir().unwrap_or_default().join(".ccx_history");
     let _ = rl.load_history(&history_path);
 
     // Session tracking.
@@ -1029,24 +1053,22 @@ async fn run_inline_mode(
     // Handle --continue flag.
     if continue_session {
         match sessions::find_latest_for_cwd(&cwd_str) {
-            Some(meta) => {
-                match sessions::load_session_messages(&cwd_str, &meta.id) {
-                    Ok(messages) if !messages.is_empty() => {
-                        let count = messages.len();
-                        agent.set_messages(messages);
-                        session_id = meta.id.clone();
-                        session_turns = meta.turns;
-                        first_preview = meta.preview.clone();
-                        let short_id = &session_id[..session_id.len().min(8)];
-                        println!(
-                            "\x1b[32m\u{21bb} Resuming session {short_id} ({} turns, {count} messages)\x1b[0m",
-                            session_turns
-                        );
-                    }
-                    Ok(_) => println!("\x1b[33mLatest session has no messages.\x1b[0m"),
-                    Err(e) => println!("\x1b[31mFailed to load session: {e}\x1b[0m"),
+            Some(meta) => match sessions::load_session_messages(&cwd_str, &meta.id) {
+                Ok(messages) if !messages.is_empty() => {
+                    let count = messages.len();
+                    agent.set_messages(messages);
+                    session_id = meta.id.clone();
+                    session_turns = meta.turns;
+                    first_preview = meta.preview.clone();
+                    let short_id = &session_id[..session_id.len().min(8)];
+                    println!(
+                        "\x1b[32m\u{21bb} Resuming session {short_id} ({} turns, {count} messages)\x1b[0m",
+                        session_turns
+                    );
                 }
-            }
+                Ok(_) => println!("\x1b[33mLatest session has no messages.\x1b[0m"),
+                Err(e) => println!("\x1b[31mFailed to load session: {e}\x1b[0m"),
+            },
             None => println!("\x1b[90mNo previous session found for this directory.\x1b[0m"),
         }
     } else if let Some(id) = resume_id {
@@ -1061,11 +1083,15 @@ async fn run_inline_mode(
                     let ts = sessions::format_epoch(s.last_active);
                     println!(
                         "  \x1b[33m{}\x1b[0m  {ts} ({} turns)  {}",
-                        i + 1, s.turns, s.preview
+                        i + 1,
+                        s.turns,
+                        s.preview
                     );
                     println!("    ID: {}", s.id);
                 }
-                println!("\n\x1b[90mUse: /resume <session-id>  or  ccx chat --resume <id>\x1b[0m\n");
+                println!(
+                    "\n\x1b[90mUse: /resume <session-id>  or  ccx chat --resume <id>\x1b[0m\n"
+                );
             }
         } else {
             // --resume <id>: load specific session.
@@ -1101,7 +1127,7 @@ async fn run_inline_mode(
                 let _ = rl.add_history_entry(input);
 
                 // Slash command handling.
-                if input.starts_with('/') {
+                if let Some(after_slash) = input.strip_prefix('/') {
                     // Parse command and args.
                     let (cmd_word, cmd_args) = match input.split_once(' ') {
                         Some((c, a)) => (c, Some(a.trim())),
@@ -1139,29 +1165,47 @@ async fn run_inline_mode(
                             let before = agent.messages().len();
                             agent.compact();
                             let after = agent.messages().len();
-                            let before_tokens: usize = agent.messages().iter().map(|m| {
-                                match &m.content {
+                            let before_tokens: usize = agent
+                                .messages()
+                                .iter()
+                                .map(|m| match &m.content {
                                     ccx_api::MessageContent::Text(t) => t.len() / 4,
-                                    ccx_api::MessageContent::Blocks(b) => b.iter().map(|bl| match bl {
-                                        ccx_api::ContentBlock::Text { text } => text.len() / 4,
-                                        ccx_api::ContentBlock::ToolUse { input, .. } => input.to_string().len() / 4,
-                                        ccx_api::ContentBlock::ToolResult { content, .. } => content.len() / 4,
-                                        ccx_api::ContentBlock::Thinking { thinking, .. } => thinking.len() / 4,
-                                    }).sum(),
-                                }
-                            }).sum();
-                            println!("\x1b[32mContext compacted.\x1b[0m Messages: {before} → {after} | ~{before_tokens} tokens remaining");
+                                    ccx_api::MessageContent::Blocks(b) => b
+                                        .iter()
+                                        .map(|bl| match bl {
+                                            ccx_api::ContentBlock::Text { text } => text.len() / 4,
+                                            ccx_api::ContentBlock::ToolUse { input, .. } => {
+                                                input.to_string().len() / 4
+                                            }
+                                            ccx_api::ContentBlock::ToolResult {
+                                                content, ..
+                                            } => content.len() / 4,
+                                            ccx_api::ContentBlock::Thinking {
+                                                thinking, ..
+                                            } => thinking.len() / 4,
+                                        })
+                                        .sum(),
+                                })
+                                .sum();
+                            println!(
+                                "\x1b[32mContext compacted.\x1b[0m Messages: {before} → {after} | ~{before_tokens} tokens remaining"
+                            );
                             true
                         }
                         "/init" => {
                             let claude_md_path = cwd.join("CLAUDE.md");
                             if claude_md_path.exists() {
-                                println!("\x1b[33mCLAUDE.md already exists in this directory.\x1b[0m");
+                                println!(
+                                    "\x1b[33mCLAUDE.md already exists in this directory.\x1b[0m"
+                                );
                             } else {
-                                let template = "# Project Instructions\n\nDescribe your project here.\n";
+                                let template =
+                                    "# Project Instructions\n\nDescribe your project here.\n";
                                 match std::fs::write(&claude_md_path, template) {
                                     Ok(_) => println!("\x1b[32mCreated CLAUDE.md\x1b[0m"),
-                                    Err(e) => println!("\x1b[31mFailed to create CLAUDE.md: {e}\x1b[0m"),
+                                    Err(e) => {
+                                        println!("\x1b[31mFailed to create CLAUDE.md: {e}\x1b[0m")
+                                    }
                                 }
                             }
                             true
@@ -1171,8 +1215,12 @@ async fn run_inline_mode(
                             true
                         }
                         "/login" => {
-                            match tokio::runtime::Handle::current().block_on(ccx_auth::oauth::login()) {
-                                Ok(_) => println!("Login successful! Restart ccx to use your subscription."),
+                            match tokio::runtime::Handle::current()
+                                .block_on(ccx_auth::oauth::login())
+                            {
+                                Ok(_) => println!(
+                                    "Login successful! Restart ccx to use your subscription."
+                                ),
                                 Err(e) => println!("\x1b[31mLogin failed: {e}\x1b[0m"),
                             }
                             true
@@ -1189,7 +1237,10 @@ async fn run_inline_mode(
                                         let count = messages.len();
                                         let meta = sessions::find_session_meta(&cwd_str, sid);
                                         let turns = meta.as_ref().map(|m| m.turns).unwrap_or(0);
-                                        first_preview = meta.as_ref().map(|m| m.preview.clone()).unwrap_or_default();
+                                        first_preview = meta
+                                            .as_ref()
+                                            .map(|m| m.preview.clone())
+                                            .unwrap_or_default();
                                         agent.set_messages(messages);
                                         session_id = sid.to_string();
                                         session_turns = turns;
@@ -1198,7 +1249,9 @@ async fn run_inline_mode(
                                             "\x1b[32m\u{21bb} Resumed session {short_id} ({turns} turns, {count} messages)\x1b[0m"
                                         );
                                     }
-                                    Ok(_) => println!("\x1b[33mSession {sid} has no messages.\x1b[0m"),
+                                    Ok(_) => {
+                                        println!("\x1b[33mSession {sid} has no messages.\x1b[0m")
+                                    }
                                     Err(e) => println!("\x1b[31m{e}\x1b[0m"),
                                 }
                             } else {
@@ -1209,8 +1262,13 @@ async fn run_inline_mode(
                                     println!("\n\x1b[1mRecent sessions:\x1b[0m\n");
                                     for (i, s) in all.iter().take(10).enumerate() {
                                         let ts = sessions::format_epoch(s.last_active);
-                                        println!("  \x1b[33m{}\x1b[0m  \x1b[90m{ts}\x1b[0m  ({} turns)  {}", s.id, s.turns, s.preview);
-                                        if i >= 9 { break; }
+                                        println!(
+                                            "  \x1b[33m{}\x1b[0m  \x1b[90m{ts}\x1b[0m  ({} turns)  {}",
+                                            s.id, s.turns, s.preview
+                                        );
+                                        if i >= 9 {
+                                            break;
+                                        }
                                     }
                                     println!("\n\x1b[90mUsage: /resume <session-id>\x1b[0m\n");
                                 }
@@ -1233,12 +1291,18 @@ async fn run_inline_mode(
                                                 session_turns
                                             );
                                         }
-                                        Ok(_) => println!("\x1b[33mLatest session has no messages.\x1b[0m"),
-                                        Err(e) => println!("\x1b[31mFailed to load session: {e}\x1b[0m"),
+                                        Ok(_) => println!(
+                                            "\x1b[33mLatest session has no messages.\x1b[0m"
+                                        ),
+                                        Err(e) => {
+                                            println!("\x1b[31mFailed to load session: {e}\x1b[0m")
+                                        }
                                     }
                                 }
                                 None => {
-                                    println!("\x1b[90mNo previous session found for this directory.\x1b[0m");
+                                    println!(
+                                        "\x1b[90mNo previous session found for this directory.\x1b[0m"
+                                    );
                                 }
                             }
                             true
@@ -1247,12 +1311,16 @@ async fn run_inline_mode(
                             println!("\n\x1b[1mccx Doctor\x1b[0m\n");
 
                             // Check API key.
-                            let api_ok = std::env::var("ANTHROPIC_API_KEY").map(|k| !k.is_empty()).unwrap_or(false);
+                            let api_ok = std::env::var("ANTHROPIC_API_KEY")
+                                .map(|k| !k.is_empty())
+                                .unwrap_or(false);
                             let oauth_ok = ccx_auth::resolve_auth(None).is_ok();
                             if api_ok || oauth_ok {
                                 println!("  \x1b[32m✓\x1b[0m Authentication: {auth_source}");
                             } else {
-                                println!("  \x1b[31m✗\x1b[0m Authentication: no API key or OAuth token found");
+                                println!(
+                                    "  \x1b[31m✗\x1b[0m Authentication: no API key or OAuth token found"
+                                );
                             }
 
                             // Check tools.
@@ -1261,19 +1329,25 @@ async fn run_inline_mode(
                             // Check MCP servers.
                             if let Some(ref cfg) = mcp_config {
                                 let count = cfg.mcp_servers.len();
-                                println!("  \x1b[32m✓\x1b[0m MCP servers: {count} configured in .mcp.json");
+                                println!(
+                                    "  \x1b[32m✓\x1b[0m MCP servers: {count} configured in .mcp.json"
+                                );
                                 for name in cfg.mcp_servers.keys() {
                                     println!("    \x1b[90m- {name}\x1b[0m");
                                 }
                             } else {
-                                println!("  \x1b[90m-\x1b[0m MCP servers: none (.mcp.json not found)");
+                                println!(
+                                    "  \x1b[90m-\x1b[0m MCP servers: none (.mcp.json not found)"
+                                );
                             }
 
                             // Check CLAUDE.md.
                             if cwd.join("CLAUDE.md").exists() {
                                 println!("  \x1b[32m✓\x1b[0m CLAUDE.md: found");
                             } else {
-                                println!("  \x1b[90m-\x1b[0m CLAUDE.md: not found (use /init to create)");
+                                println!(
+                                    "  \x1b[90m-\x1b[0m CLAUDE.md: not found (use /init to create)"
+                                );
                             }
 
                             // Check skills.
@@ -1286,12 +1360,26 @@ async fn run_inline_mode(
                         "/config" => {
                             println!("\n\x1b[1mCurrent Configuration\x1b[0m\n");
                             println!("  Model:       {model}");
-                            println!("  Provider:    {}", if auth_source.contains("OAuth") || auth_source.contains("Claude") { "anthropic (OAuth)" } else { "anthropic" });
+                            println!(
+                                "  Provider:    {}",
+                                if auth_source.contains("OAuth") || auth_source.contains("Claude") {
+                                    "anthropic (OAuth)"
+                                } else {
+                                    "anthropic"
+                                }
+                            );
                             println!("  Auth:        {auth_source}");
                             if let Some(ref e) = email {
                                 println!("  Account:     {e}");
                             }
-                            println!("  Permission:  {}", if bypass_permissions { "bypass" } else { "default" });
+                            println!(
+                                "  Permission:  {}",
+                                if bypass_permissions {
+                                    "bypass"
+                                } else {
+                                    "default"
+                                }
+                            );
                             println!("  Tools:       {tool_count}");
                             println!("  Skills:      {}", discovered_skills.len());
                             if let Some(ref cfg) = mcp_config {
@@ -1306,7 +1394,10 @@ async fn run_inline_mode(
                             if all.is_empty() {
                                 println!("\x1b[90mNo saved sessions for this directory.\x1b[0m");
                             } else {
-                                println!("\n\x1b[1mSessions for this directory ({}):\x1b[0m\n", all.len());
+                                println!(
+                                    "\n\x1b[1mSessions for this directory ({}):\x1b[0m\n",
+                                    all.len()
+                                );
                                 for s in all.iter().take(15) {
                                     let ts = sessions::format_epoch(s.last_active);
                                     println!(
@@ -1335,7 +1426,9 @@ async fn run_inline_mode(
                         }
                         "/simplify" => {
                             // Route to the simplify skill if discovered.
-                            if let Some(skill) = ccx_skill::find_skill(&discovered_skills, "simplify") {
+                            if let Some(skill) =
+                                ccx_skill::find_skill(&discovered_skills, "simplify")
+                            {
                                 let result = ccx_skill::expand_skill(skill, None);
                                 let user_msg = format!(
                                     "The user invoked skill 'simplify'\n\n<skill-content>\n{}\n</skill-content>",
@@ -1343,7 +1436,11 @@ async fn run_inline_mode(
                                 );
                                 ccx_tui::inline::clear_previous_line();
                                 ccx_tui::inline::render_user_message("/simplify");
-                                let mut cb = InlineCallback::new(bypass_permissions, auth_source, show_thinking);
+                                let mut cb = InlineCallback::new(
+                                    bypass_permissions,
+                                    auth_source,
+                                    show_thinking,
+                                );
                                 match agent.send_message(&user_msg, &mut cb).await {
                                     Ok(_) => cb.finish_text(),
                                     Err(e) => {
@@ -1354,13 +1451,17 @@ async fn run_inline_mode(
                                 ccx_tui::inline::render_separator();
                                 session_turns += 1;
                             } else {
-                                println!("\x1b[90mSimplify skill not found. Ensure skills are installed.\x1b[0m");
+                                println!(
+                                    "\x1b[90mSimplify skill not found. Ensure skills are installed.\x1b[0m"
+                                );
                             }
                             true
                         }
                         "/batch" => {
                             if let Some(batch_args) = cmd_args {
-                                if let Some(skill) = ccx_skill::find_skill(&discovered_skills, "batch") {
+                                if let Some(skill) =
+                                    ccx_skill::find_skill(&discovered_skills, "batch")
+                                {
                                     let result = ccx_skill::expand_skill(skill, Some(batch_args));
                                     let user_msg = format!(
                                         "The user invoked skill 'batch' with args: {}\n\n<skill-content>\n{}\n</skill-content>",
@@ -1368,7 +1469,11 @@ async fn run_inline_mode(
                                     );
                                     ccx_tui::inline::clear_previous_line();
                                     ccx_tui::inline::render_user_message(input);
-                                    let mut cb = InlineCallback::new(bypass_permissions, auth_source, show_thinking);
+                                    let mut cb = InlineCallback::new(
+                                        bypass_permissions,
+                                        auth_source,
+                                        show_thinking,
+                                    );
                                     match agent.send_message(&user_msg, &mut cb).await {
                                         Ok(_) => cb.finish_text(),
                                         Err(e) => {
@@ -1379,7 +1484,9 @@ async fn run_inline_mode(
                                     ccx_tui::inline::render_separator();
                                     session_turns += 1;
                                 } else {
-                                    println!("\x1b[90mBatch skill not found. Ensure skills are installed.\x1b[0m");
+                                    println!(
+                                        "\x1b[90mBatch skill not found. Ensure skills are installed.\x1b[0m"
+                                    );
                                 }
                             } else {
                                 println!("\x1b[33mUsage: /batch <prompt>\x1b[0m");
@@ -1398,7 +1505,6 @@ async fn run_inline_mode(
                     }
 
                     // Try to match a discovered skill.
-                    let after_slash = &input[1..];
                     let (skill_query, skill_args) = match after_slash.split_once(' ') {
                         Some((name, args)) => (name, Some(args)),
                         None => (after_slash, None),
@@ -1419,12 +1525,10 @@ async fn run_inline_mode(
                         };
 
                         ccx_tui::inline::clear_previous_line();
-                        ccx_tui::inline::render_skill_invocation(
-                            &skill.name,
-                            skill_args,
-                        );
+                        ccx_tui::inline::render_skill_invocation(&skill.name, skill_args);
 
-                        let mut cb = InlineCallback::new(bypass_permissions, auth_source, show_thinking);
+                        let mut cb =
+                            InlineCallback::new(bypass_permissions, auth_source, show_thinking);
                         match agent.send_message(&user_msg, &mut cb).await {
                             Ok(_) => cb.finish_text(),
                             Err(e) => {
@@ -1473,7 +1577,8 @@ async fn run_inline_mode(
                     preview: first_preview.clone(),
                     name: None,
                     turns: session_turns,
-                    total_tokens: agent.cost().total_input_tokens + agent.cost().total_output_tokens,
+                    total_tokens: agent.cost().total_input_tokens
+                        + agent.cost().total_output_tokens,
                 });
 
                 ccx_tui::inline::render_separator();
@@ -1495,7 +1600,11 @@ async fn run_inline_mode(
             model: model.to_string(),
             created: session_created,
             last_active: sessions::now_epoch(),
-            preview: if first_preview.is_empty() { "(no messages)".into() } else { first_preview },
+            preview: if first_preview.is_empty() {
+                "(no messages)".into()
+            } else {
+                first_preview
+            },
             name: None,
             turns: session_turns,
             total_tokens: agent.cost().total_input_tokens + agent.cost().total_output_tokens,
@@ -1511,4 +1620,3 @@ async fn run_inline_mode(
     eprintln!("\n{}", agent.cost().summary());
     Ok(())
 }
-

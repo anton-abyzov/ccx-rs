@@ -1,5 +1,4 @@
 /// Slash command definitions for the inline interactive mode.
-
 /// A slash command available in interactive mode.
 pub struct SlashCommand {
     pub name: &'static str,
@@ -109,10 +108,7 @@ pub fn print_command_list(skills: &[(String, String)]) {
     if !skills.is_empty() {
         println!("\n{BOLD}Skills ({}):{RESET}\n", skills.len());
         for (name, desc) in skills {
-            println!(
-                "  {SKILL_ACCENT}{:<24}{RESET} {DIM}— {}{RESET}",
-                name, desc
-            );
+            println!("  {SKILL_ACCENT}{:<24}{RESET} {DIM}— {}{RESET}", name, desc);
         }
     }
     println!();
@@ -144,10 +140,7 @@ pub fn print_suggestions(prefix: &str, skills: &[(String, String)]) {
         );
     }
     for (name, desc) in skill_matches {
-        println!(
-            "  {SKILL_ACCENT}{:<24}{RESET} {DIM}— {}{RESET}",
-            name, desc
-        );
+        println!("  {SKILL_ACCENT}{:<24}{RESET} {DIM}— {}{RESET}", name, desc);
     }
     println!();
 }

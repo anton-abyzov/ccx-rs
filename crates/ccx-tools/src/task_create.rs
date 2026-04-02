@@ -74,14 +74,8 @@ impl Tool for TaskCreateTool {
             ));
         }
 
-        let description = input["description"]
-            .as_str()
-            .unwrap_or("")
-            .to_string();
-        let status = input["status"]
-            .as_str()
-            .unwrap_or("pending")
-            .to_string();
+        let description = input["description"].as_str().unwrap_or("").to_string();
+        let status = input["status"].as_str().unwrap_or("pending").to_string();
         let owner = input["owner"].as_str().map(|s| s.to_string());
 
         if !["pending", "in_progress", "completed"].contains(&status.as_str()) {
@@ -110,8 +104,7 @@ impl Tool for TaskCreateTool {
 
         let task_json = serde_json::to_string_pretty(&task)
             .map_err(|e| ToolError::Execution(format!("serialize error: {e}")))?;
-        std::fs::write(tasks_path.join(format!("{id}.json")), &task_json)
-            .map_err(ToolError::Io)?;
+        std::fs::write(tasks_path.join(format!("{id}.json")), &task_json).map_err(ToolError::Io)?;
 
         let owner_str = owner.as_deref().unwrap_or("unassigned");
         Ok(ToolResult {
@@ -126,8 +119,8 @@ impl Tool for TaskCreateTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::meta_helpers::{cleanup, test_ctx};
     use crate::TeamCreateTool;
+    use crate::meta_helpers::{cleanup, test_ctx};
 
     async fn setup_team(ctx: &ToolContext) {
         TeamCreateTool
@@ -158,7 +151,8 @@ mod tests {
 
         let file = base.join("tasks/task-test/1.json");
         assert!(file.exists());
-        let data: TaskRecord = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        let data: TaskRecord =
+            serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
         assert_eq!(data.id, "1");
         assert_eq!(data.subject, "Write tests");
         assert_eq!(data.status, "pending");
@@ -176,7 +170,10 @@ mod tests {
             .await
             .unwrap();
         let r2 = TaskCreateTool
-            .execute(json!({"subject": "Second", "status": "in_progress", "owner": "agent-a"}), &ctx)
+            .execute(
+                json!({"subject": "Second", "status": "in_progress", "owner": "agent-a"}),
+                &ctx,
+            )
             .await
             .unwrap();
 

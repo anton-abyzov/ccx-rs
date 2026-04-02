@@ -17,16 +17,12 @@ impl SeatbeltSandbox {
 
         // Allow reading specified paths.
         for path in &config.allow_read {
-            rules.push(format!(
-                "(allow file-read* (subpath \"{path}\"))"
-            ));
+            rules.push(format!("(allow file-read* (subpath \"{path}\"))"));
         }
 
         // Allow writing to specified paths.
         for path in &config.allow_write {
-            rules.push(format!(
-                "(allow file-write* (subpath \"{path}\"))"
-            ));
+            rules.push(format!("(allow file-write* (subpath \"{path}\"))"));
         }
 
         // Always allow read/write in working directory.

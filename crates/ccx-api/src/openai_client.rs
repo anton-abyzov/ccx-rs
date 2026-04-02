@@ -7,8 +7,8 @@ use std::collections::{HashMap, VecDeque};
 use std::pin::Pin;
 
 use futures::stream::{self, BoxStream, Stream, StreamExt};
-use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use reqwest::StatusCode;
+use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
 
 use crate::client::byte_stream_to_lines;
@@ -71,10 +71,10 @@ impl OpenAiClient {
             "max_tokens": req.max_tokens,
         });
 
-        if let Some(tools) = tools {
-            if !tools.is_empty() {
-                body["tools"] = serde_json::to_value(tools).unwrap_or_default();
-            }
+        if let Some(tools) = tools
+            && !tools.is_empty()
+        {
+            body["tools"] = serde_json::to_value(tools).unwrap_or_default();
         }
         if let Some(temp) = req.temperature {
             body["temperature"] = serde_json::json!(temp);
@@ -318,8 +318,7 @@ fn convert_messages(messages: &[InputMessage], system: Option<&str>) -> Vec<Open
                                     call_type: "function".into(),
                                     function: OpenAiFunctionCall {
                                         name: name.clone(),
-                                        arguments: serde_json::to_string(input)
-                                            .unwrap_or_default(),
+                                        arguments: serde_json::to_string(input).unwrap_or_default(),
                                     },
                                 });
                             }
@@ -414,10 +413,7 @@ fn openai_sse_to_events(
                                     }
                                 }
                                 Err(e) => {
-                                    return Some((
-                                        Err(Error::SseParse(format!("{e}: {data}"))),
-                                        s,
-                                    ));
+                                    return Some((Err(Error::SseParse(format!("{e}: {data}"))), s));
                                 }
                             }
                         }
@@ -458,9 +454,7 @@ fn process_chunk(chunk: OpenAiChunk, state: &mut OpenAiStreamState) {
     if chunk.choices.is_empty() {
         if let Some(usage) = usage_copy {
             state.pending.push_back(Ok(StreamEvent::MessageDelta {
-                delta: MessageDelta {
-                    stop_reason: None,
-                },
+                delta: MessageDelta { stop_reason: None },
                 usage: Some(Usage {
                     input_tokens: usage.prompt_tokens,
                     output_tokens: usage.completion_tokens,
@@ -475,13 +469,84 @@ fn process_chunk(chunk: OpenAiChunk, state: &mut OpenAiStreamState) {
     let choice = &chunk.choices[0];
 
     // Reasoning content: check `reasoning_content` (direct DeepSeek API) then `reasoning` (OpenRouter).
-    let reasoning_text = choice.delta.reasoning_content.as_deref()
+    let reasoning_text = choice
+        .delta
+        .reasoning_content
+        .as_deref()
         .or(choice.delta.reasoning.as_deref());
-    if let Some(reasoning) = reasoning_text {
-        if !reasoning.is_empty() {
-            let idx = match state.thinking_block_idx {
-                Some(idx) => idx,
-                None => {
+    if let Some(reasoning) = reasoning_text
+        && !reasoning.is_empty()
+    {
+        let idx = match state.thinking_block_idx {
+            Some(idx) => idx,
+            None => {
+                let idx = state.next_idx;
+                state.thinking_block_idx = Some(idx);
+                state.next_idx += 1;
+                state.pending.push_back(Ok(StreamEvent::ContentBlockStart {
+                    index: idx,
+                    content_block: ContentBlock::Thinking {
+                        thinking: String::new(),
+                        signature: None,
+                    },
+                }));
+                idx
+            }
+        };
+        state.pending.push_back(Ok(StreamEvent::ContentBlockDelta {
+            index: idx,
+            delta: Delta::ThinkingDelta {
+                thinking: reasoning.to_string(),
+            },
+        }));
+    }
+
+    // Text content with <think> tag detection.
+    if let Some(text) = &choice.delta.content
+        && !text.is_empty()
+    {
+        let mut remaining = text.as_str();
+        while !remaining.is_empty() {
+            if state.in_think_tag {
+                // Inside a <think> block — look for closing tag.
+                if let Some(end_pos) = remaining.find("</think>") {
+                    let thinking_text = &remaining[..end_pos];
+                    if !thinking_text.is_empty() {
+                        let idx = state.thinking_block_idx.unwrap();
+                        state.pending.push_back(Ok(StreamEvent::ContentBlockDelta {
+                            index: idx,
+                            delta: Delta::ThinkingDelta {
+                                thinking: thinking_text.to_string(),
+                            },
+                        }));
+                    }
+                    state.in_think_tag = false;
+                    remaining = &remaining[(end_pos + 8)..]; // skip "</think>"
+                } else {
+                    // All remaining is thinking content.
+                    let idx = state.thinking_block_idx.unwrap();
+                    state.pending.push_back(Ok(StreamEvent::ContentBlockDelta {
+                        index: idx,
+                        delta: Delta::ThinkingDelta {
+                            thinking: remaining.to_string(),
+                        },
+                    }));
+                    remaining = "";
+                }
+            } else if let Some(start_pos) = remaining.find("<think>") {
+                // Text before <think> tag is regular content.
+                let before = &remaining[..start_pos];
+                if !before.is_empty() {
+                    let idx = ensure_text_block(state);
+                    state.pending.push_back(Ok(StreamEvent::ContentBlockDelta {
+                        index: idx,
+                        delta: Delta::TextDelta {
+                            text: before.to_string(),
+                        },
+                    }));
+                }
+                // Start thinking block.
+                if state.thinking_block_idx.is_none() {
                     let idx = state.next_idx;
                     state.thinking_block_idx = Some(idx);
                     state.next_idx += 1;
@@ -492,87 +557,19 @@ fn process_chunk(chunk: OpenAiChunk, state: &mut OpenAiStreamState) {
                             signature: None,
                         },
                     }));
-                    idx
                 }
-            };
-            state.pending.push_back(Ok(StreamEvent::ContentBlockDelta {
-                index: idx,
-                delta: Delta::ThinkingDelta {
-                    thinking: reasoning.to_string(),
-                },
-            }));
-        }
-    }
-
-    // Text content with <think> tag detection.
-    if let Some(text) = &choice.delta.content {
-        if !text.is_empty() {
-            let mut remaining = text.as_str();
-            while !remaining.is_empty() {
-                if state.in_think_tag {
-                    // Inside a <think> block — look for closing tag.
-                    if let Some(end_pos) = remaining.find("</think>") {
-                        let thinking_text = &remaining[..end_pos];
-                        if !thinking_text.is_empty() {
-                            let idx = state.thinking_block_idx.unwrap();
-                            state.pending.push_back(Ok(StreamEvent::ContentBlockDelta {
-                                index: idx,
-                                delta: Delta::ThinkingDelta {
-                                    thinking: thinking_text.to_string(),
-                                },
-                            }));
-                        }
-                        state.in_think_tag = false;
-                        remaining = &remaining[(end_pos + 8)..]; // skip "</think>"
-                    } else {
-                        // All remaining is thinking content.
-                        let idx = state.thinking_block_idx.unwrap();
-                        state.pending.push_back(Ok(StreamEvent::ContentBlockDelta {
-                            index: idx,
-                            delta: Delta::ThinkingDelta {
-                                thinking: remaining.to_string(),
-                            },
-                        }));
-                        remaining = "";
-                    }
-                } else if let Some(start_pos) = remaining.find("<think>") {
-                    // Text before <think> tag is regular content.
-                    let before = &remaining[..start_pos];
-                    if !before.is_empty() {
-                        let idx = ensure_text_block(state);
-                        state.pending.push_back(Ok(StreamEvent::ContentBlockDelta {
-                            index: idx,
-                            delta: Delta::TextDelta {
-                                text: before.to_string(),
-                            },
-                        }));
-                    }
-                    // Start thinking block.
-                    if state.thinking_block_idx.is_none() {
-                        let idx = state.next_idx;
-                        state.thinking_block_idx = Some(idx);
-                        state.next_idx += 1;
-                        state.pending.push_back(Ok(StreamEvent::ContentBlockStart {
-                            index: idx,
-                            content_block: ContentBlock::Thinking {
-                                thinking: String::new(),
-                                signature: None,
-                            },
-                        }));
-                    }
-                    state.in_think_tag = true;
-                    remaining = &remaining[(start_pos + 7)..]; // skip "<think>"
-                } else {
-                    // Regular text content.
-                    let idx = ensure_text_block(state);
-                    state.pending.push_back(Ok(StreamEvent::ContentBlockDelta {
-                        index: idx,
-                        delta: Delta::TextDelta {
-                            text: remaining.to_string(),
-                        },
-                    }));
-                    remaining = "";
-                }
+                state.in_think_tag = true;
+                remaining = &remaining[(start_pos + 7)..]; // skip "<think>"
+            } else {
+                // Regular text content.
+                let idx = ensure_text_block(state);
+                state.pending.push_back(Ok(StreamEvent::ContentBlockDelta {
+                    index: idx,
+                    delta: Delta::TextDelta {
+                        text: remaining.to_string(),
+                    },
+                }));
+                remaining = "";
             }
         }
     }
@@ -607,20 +604,17 @@ fn process_chunk(chunk: OpenAiChunk, state: &mut OpenAiStreamState) {
                 }));
             }
 
-            if let Some(func) = &tc.function {
-                if let Some(args) = &func.arguments {
-                    if !args.is_empty() {
-                        let anthropic_idx = state.tool_blocks[&openai_idx];
-                        state
-                            .pending
-                            .push_back(Ok(StreamEvent::ContentBlockDelta {
-                                index: anthropic_idx,
-                                delta: Delta::InputJsonDelta {
-                                    partial_json: args.clone(),
-                                },
-                            }));
-                    }
-                }
+            if let Some(func) = &tc.function
+                && let Some(args) = &func.arguments
+                && !args.is_empty()
+            {
+                let anthropic_idx = state.tool_blocks[&openai_idx];
+                state.pending.push_back(Ok(StreamEvent::ContentBlockDelta {
+                    index: anthropic_idx,
+                    delta: Delta::InputJsonDelta {
+                        partial_json: args.clone(),
+                    },
+                }));
             }
         }
     }
@@ -732,7 +726,10 @@ mod tests {
 
         // Should have: ContentBlockStart, ContentBlockDelta("Four"), MessageDelta(EndTurn)
         assert!(events.len() >= 2);
-        assert!(matches!(events.last(), Some(StreamEvent::MessageDelta { .. })));
+        assert!(matches!(
+            events.last(),
+            Some(StreamEvent::MessageDelta { .. })
+        ));
     }
 
     #[tokio::test]
@@ -756,13 +753,29 @@ mod tests {
         // Should have: ThinkingStart, ThinkingDelta x2, TextStart, TextDelta, MessageDelta
         let thinking_deltas: Vec<_> = events
             .iter()
-            .filter(|e| matches!(e, StreamEvent::ContentBlockDelta { delta: Delta::ThinkingDelta { .. }, .. }))
+            .filter(|e| {
+                matches!(
+                    e,
+                    StreamEvent::ContentBlockDelta {
+                        delta: Delta::ThinkingDelta { .. },
+                        ..
+                    }
+                )
+            })
             .collect();
         assert_eq!(thinking_deltas.len(), 2, "expected 2 thinking deltas");
 
         let text_deltas: Vec<_> = events
             .iter()
-            .filter(|e| matches!(e, StreamEvent::ContentBlockDelta { delta: Delta::TextDelta { .. }, .. }))
+            .filter(|e| {
+                matches!(
+                    e,
+                    StreamEvent::ContentBlockDelta {
+                        delta: Delta::TextDelta { .. },
+                        ..
+                    }
+                )
+            })
             .collect();
         assert_eq!(text_deltas.len(), 1, "expected 1 text delta");
     }
@@ -786,15 +799,37 @@ mod tests {
 
         let thinking_deltas: Vec<_> = events
             .iter()
-            .filter(|e| matches!(e, StreamEvent::ContentBlockDelta { delta: Delta::ThinkingDelta { .. }, .. }))
+            .filter(|e| {
+                matches!(
+                    e,
+                    StreamEvent::ContentBlockDelta {
+                        delta: Delta::ThinkingDelta { .. },
+                        ..
+                    }
+                )
+            })
             .collect();
-        assert!(thinking_deltas.len() >= 1, "expected thinking deltas from <think> tags");
+        assert!(
+            !thinking_deltas.is_empty(),
+            "expected thinking deltas from <think> tags"
+        );
 
         let text_deltas: Vec<_> = events
             .iter()
-            .filter(|e| matches!(e, StreamEvent::ContentBlockDelta { delta: Delta::TextDelta { .. }, .. }))
+            .filter(|e| {
+                matches!(
+                    e,
+                    StreamEvent::ContentBlockDelta {
+                        delta: Delta::TextDelta { .. },
+                        ..
+                    }
+                )
+            })
             .collect();
-        assert!(text_deltas.len() >= 1, "expected text delta after </think>");
+        assert!(
+            !text_deltas.is_empty(),
+            "expected text delta after </think>"
+        );
     }
 
     #[tokio::test]
@@ -817,13 +852,33 @@ mod tests {
 
         let thinking_deltas: Vec<_> = events
             .iter()
-            .filter(|e| matches!(e, StreamEvent::ContentBlockDelta { delta: Delta::ThinkingDelta { .. }, .. }))
+            .filter(|e| {
+                matches!(
+                    e,
+                    StreamEvent::ContentBlockDelta {
+                        delta: Delta::ThinkingDelta { .. },
+                        ..
+                    }
+                )
+            })
             .collect();
-        assert_eq!(thinking_deltas.len(), 2, "expected 2 thinking deltas from 'reasoning' field");
+        assert_eq!(
+            thinking_deltas.len(),
+            2,
+            "expected 2 thinking deltas from 'reasoning' field"
+        );
 
         let text_deltas: Vec<_> = events
             .iter()
-            .filter(|e| matches!(e, StreamEvent::ContentBlockDelta { delta: Delta::TextDelta { .. }, .. }))
+            .filter(|e| {
+                matches!(
+                    e,
+                    StreamEvent::ContentBlockDelta {
+                        delta: Delta::TextDelta { .. },
+                        ..
+                    }
+                )
+            })
             .collect();
         assert_eq!(text_deltas.len(), 1, "expected 1 text delta");
     }

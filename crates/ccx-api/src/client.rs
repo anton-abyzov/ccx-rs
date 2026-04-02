@@ -1,8 +1,8 @@
 use std::pin::Pin;
 
 use futures::stream::{self, BoxStream, Stream, StreamExt};
-use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE};
 use reqwest::StatusCode;
+use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
 
 use crate::error::Error;
 use crate::types::{MessageRequest, StreamEvent};
@@ -82,10 +82,7 @@ impl ClaudeClient {
         } else {
             headers.insert("x-api-key", HeaderValue::from_str(&self.api_key).unwrap());
         }
-        headers.insert(
-            "anthropic-version",
-            HeaderValue::from_static(API_VERSION),
-        );
+        headers.insert("anthropic-version", HeaderValue::from_static(API_VERSION));
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         headers.insert(
             "anthropic-beta",
@@ -196,31 +193,28 @@ pub(crate) fn byte_stream_to_lines(
 ) -> impl Stream<Item = Result<String, reqwest::Error>> + Send {
     let boxed: BoxStream<'static, Result<bytes::Bytes, reqwest::Error>> = byte_stream.boxed();
 
-    stream::unfold(
-        (boxed, String::new()),
-        |(mut bytes, mut buf)| async move {
-            loop {
-                if let Some(pos) = buf.find('\n') {
-                    let line = buf[..pos].trim_end_matches('\r').to_string();
-                    buf = buf[pos + 1..].to_string();
+    stream::unfold((boxed, String::new()), |(mut bytes, mut buf)| async move {
+        loop {
+            if let Some(pos) = buf.find('\n') {
+                let line = buf[..pos].trim_end_matches('\r').to_string();
+                buf = buf[pos + 1..].to_string();
+                return Some((Ok(line), (bytes, buf)));
+            }
+            match bytes.next().await {
+                None => {
+                    if buf.is_empty() {
+                        return None;
+                    }
+                    let line = std::mem::take(&mut buf);
                     return Some((Ok(line), (bytes, buf)));
                 }
-                match bytes.next().await {
-                    None => {
-                        if buf.is_empty() {
-                            return None;
-                        }
-                        let line = std::mem::take(&mut buf);
-                        return Some((Ok(line), (bytes, buf)));
-                    }
-                    Some(Err(e)) => return Some((Err(e), (bytes, buf))),
-                    Some(Ok(chunk)) => {
-                        buf.push_str(&String::from_utf8_lossy(&chunk));
-                    }
+                Some(Err(e)) => return Some((Err(e), (bytes, buf))),
+                Some(Ok(chunk)) => {
+                    buf.push_str(&String::from_utf8_lossy(&chunk));
                 }
             }
-        },
-    )
+        }
+    })
 }
 
 #[cfg(test)]

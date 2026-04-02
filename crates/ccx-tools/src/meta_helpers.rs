@@ -5,15 +5,15 @@ use ccx_core::{ToolContext, ToolError};
 /// Resolve the base directory for ccx meta-tool storage.
 /// Priority: ctx.env_vars["CCX_HOME"] > $CCX_HOME > ~/.claude
 pub fn resolve_base_dir(ctx: &ToolContext) -> Result<PathBuf, ToolError> {
-    if let Some(dir) = ctx.env_vars.get("CCX_HOME") {
-        if !dir.is_empty() {
-            return Ok(PathBuf::from(dir));
-        }
+    if let Some(dir) = ctx.env_vars.get("CCX_HOME")
+        && !dir.is_empty()
+    {
+        return Ok(PathBuf::from(dir));
     }
-    if let Ok(dir) = std::env::var("CCX_HOME") {
-        if !dir.is_empty() {
-            return Ok(PathBuf::from(dir));
-        }
+    if let Ok(dir) = std::env::var("CCX_HOME")
+        && !dir.is_empty()
+    {
+        return Ok(PathBuf::from(dir));
     }
     let home = std::env::var("HOME")
         .map_err(|_| ToolError::Execution("HOME environment variable not set".into()))?;
@@ -22,10 +22,10 @@ pub fn resolve_base_dir(ctx: &ToolContext) -> Result<PathBuf, ToolError> {
 
 /// Get the current team name from CCX_TEAM env var or .current file.
 pub fn current_team(base: &Path) -> Result<String, ToolError> {
-    if let Ok(team) = std::env::var("CCX_TEAM") {
-        if !team.is_empty() {
-            return Ok(team);
-        }
+    if let Ok(team) = std::env::var("CCX_TEAM")
+        && !team.is_empty()
+    {
+        return Ok(team);
     }
     let current_file = base.join("teams").join(".current");
     let name = std::fs::read_to_string(&current_file)
@@ -75,10 +75,10 @@ pub fn next_task_id(tasks_path: &Path) -> Result<u32, ToolError> {
         let entry = entry.map_err(ToolError::Io)?;
         let name = entry.file_name();
         let name_str = name.to_string_lossy();
-        if let Some(id_str) = name_str.strip_suffix(".json") {
-            if let Ok(id) = id_str.parse::<u32>() {
-                max_id = max_id.max(id);
-            }
+        if let Some(id_str) = name_str.strip_suffix(".json")
+            && let Ok(id) = id_str.parse::<u32>()
+        {
+            max_id = max_id.max(id);
         }
     }
     Ok(max_id + 1)

@@ -55,9 +55,7 @@ impl Tool for WebFetchTool {
             .as_str()
             .ok_or_else(|| ToolError::InvalidInput("url is required".into()))?;
 
-        let timeout_secs = input["timeout"]
-            .as_u64()
-            .unwrap_or(DEFAULT_TIMEOUT_SECS);
+        let timeout_secs = input["timeout"].as_u64().unwrap_or(DEFAULT_TIMEOUT_SECS);
         let max_size = input["max_size"]
             .as_u64()
             .unwrap_or(DEFAULT_MAX_BODY_SIZE as u64) as usize;
@@ -74,9 +72,7 @@ impl Tool for WebFetchTool {
             if e.is_timeout() {
                 ToolError::Timeout(timeout_secs * 1000)
             } else if e.is_redirect() {
-                ToolError::Execution(format!(
-                    "too many redirects (>{MAX_REDIRECTS}) for {url}"
-                ))
+                ToolError::Execution(format!("too many redirects (>{MAX_REDIRECTS}) for {url}"))
             } else {
                 ToolError::Execution(format!("fetch failed: {e}"))
             }
@@ -263,7 +259,8 @@ mod tests {
 
     #[test]
     fn test_strip_html_nested_script() {
-        let html = "<div>Keep<script type=\"text/javascript\">var x = 1; // remove</script>This</div>";
+        let html =
+            "<div>Keep<script type=\"text/javascript\">var x = 1; // remove</script>This</div>";
         let text = strip_html(html);
         assert!(text.contains("Keep"));
         assert!(text.contains("This"));

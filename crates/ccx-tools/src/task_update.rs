@@ -51,9 +51,7 @@ impl Tool for TaskUpdateTool {
             .to_string();
 
         if task_id.is_empty() {
-            return Err(ToolError::InvalidInput(
-                "'taskId' must not be empty".into(),
-            ));
+            return Err(ToolError::InvalidInput("'taskId' must not be empty".into()));
         }
 
         let base = meta_helpers::resolve_base_dir(ctx)?;
@@ -102,10 +100,7 @@ impl Tool for TaskUpdateTool {
         std::fs::write(&file_path, &task_json).map_err(ToolError::Io)?;
 
         Ok(ToolResult {
-            content: format!(
-                "Task #{task_id} updated: {}",
-                changes.join(", ")
-            ),
+            content: format!("Task #{task_id} updated: {}", changes.join(", ")),
             is_error: false,
         })
     }

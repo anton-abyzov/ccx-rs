@@ -48,7 +48,11 @@ pub fn decide(
         ToolCategory::Bash if mode.allows_bash() => PermissionDecision::Allow,
         ToolCategory::Network if mode.allows_writes() => PermissionDecision::Allow,
         ToolCategory::Agent if mode.allows_writes() => PermissionDecision::Allow,
-        _ if matches!(mode, PermissionMode::BypassPermissions | PermissionMode::Auto) => {
+        _ if matches!(
+            mode,
+            PermissionMode::BypassPermissions | PermissionMode::Auto
+        ) =>
+        {
             PermissionDecision::Allow
         }
         _ if matches!(mode, PermissionMode::DontAsk) => PermissionDecision::Deny,

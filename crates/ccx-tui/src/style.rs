@@ -112,9 +112,7 @@ impl Theme {
 
     /// Right panel heading text (orange bold).
     pub fn panel_heading() -> Style {
-        Style::default()
-            .fg(ACCENT)
-            .add_modifier(Modifier::BOLD)
+        Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
     }
 
     /// Right panel body text.
@@ -124,9 +122,7 @@ impl Theme {
 
     /// Title bar style.
     pub fn title_bar() -> Style {
-        Style::default()
-            .fg(ACCENT)
-            .add_modifier(Modifier::BOLD)
+        Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
     }
 }
 

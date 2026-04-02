@@ -1,5 +1,5 @@
-pub mod macos;
 pub mod linux;
+pub mod macos;
 pub mod none;
 
 use std::path::Path;

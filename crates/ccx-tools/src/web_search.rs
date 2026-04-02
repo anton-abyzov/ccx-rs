@@ -186,9 +186,8 @@ fn extract_ddg_results(html: &str) -> String {
                 if let Some(gt) = html[abs_start..].find('>') {
                     let text_start = abs_start + gt + 1;
                     if let Some(end_a) = html[text_start..].find("</a>") {
-                        let title = crate::web_fetch::strip_html(
-                            &html[text_start..text_start + end_a],
-                        );
+                        let title =
+                            crate::web_fetch::strip_html(&html[text_start..text_start + end_a]);
                         if !title.is_empty() && !url.is_empty() {
                             results.push(format!("**{}**\n{}", title.trim(), url));
                         }
@@ -212,9 +211,7 @@ fn extract_ddg_results(html: &str) -> String {
             let text_start = abs_start + gt + 1;
             // Find the closing tag.
             if let Some(end) = html[text_start..].find("</") {
-                let snippet = crate::web_fetch::strip_html(
-                    &html[text_start..text_start + end],
-                );
+                let snippet = crate::web_fetch::strip_html(&html[text_start..text_start + end]);
                 if snippet_idx < results.len() && !snippet.is_empty() {
                     results[snippet_idx].push('\n');
                     results[snippet_idx].push_str(snippet.trim());

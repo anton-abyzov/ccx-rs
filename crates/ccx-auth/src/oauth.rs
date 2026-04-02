@@ -1,8 +1,8 @@
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
 
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use rand::Rng;
 use sha2::{Digest, Sha256};
 
@@ -88,9 +88,7 @@ pub async fn login() -> Result<OAuthTokens, Box<dyn std::error::Error>> {
         .as_str()
         .ok_or("No access_token in response")?
         .to_string();
-    let refresh_token = tokens["refresh_token"]
-        .as_str()
-        .map(|s| s.to_string());
+    let refresh_token = tokens["refresh_token"].as_str().map(|s| s.to_string());
 
     // 7. Save credentials.
     save_credentials(&access_token, refresh_token.as_deref())?;
@@ -153,9 +151,18 @@ fn extract_code_from_request(
         if let Some(("error", value)) = param.split_once('=') {
             let desc = query
                 .split('&')
-                .find_map(|p| p.split_once('=').filter(|(k, _)| *k == "error_description").map(|(_, v)| v))
+                .find_map(|p| {
+                    p.split_once('=')
+                        .filter(|(k, _)| *k == "error_description")
+                        .map(|(_, v)| v)
+                })
                 .unwrap_or("unknown error");
-            return Err(format!("OAuth error: {} - {}", urlencoding::decode(value)?, urlencoding::decode(desc)?).into());
+            return Err(format!(
+                "OAuth error: {} - {}",
+                urlencoding::decode(value)?,
+                urlencoding::decode(desc)?
+            )
+            .into());
         }
     }
 
@@ -183,31 +190,31 @@ fn save_credentials(
     let creds_str = serde_json::to_string(&creds)?;
 
     // macOS: save to Keychain.
-    if cfg!(target_os = "macos") {
-        if let Ok(user) = std::env::var("USER") {
-            // Delete existing entry (ignore errors).
-            let _ = std::process::Command::new("security")
-                .args([
-                    "delete-generic-password",
-                    "-a",
-                    &user,
-                    "-s",
-                    "Claude Code-credentials",
-                ])
-                .output();
+    if cfg!(target_os = "macos")
+        && let Ok(user) = std::env::var("USER")
+    {
+        // Delete existing entry (ignore errors).
+        let _ = std::process::Command::new("security")
+            .args([
+                "delete-generic-password",
+                "-a",
+                &user,
+                "-s",
+                "Claude Code-credentials",
+            ])
+            .output();
 
-            std::process::Command::new("security")
-                .args([
-                    "add-generic-password",
-                    "-a",
-                    &user,
-                    "-s",
-                    "Claude Code-credentials",
-                    "-w",
-                    &creds_str,
-                ])
-                .output()?;
-        }
+        std::process::Command::new("security")
+            .args([
+                "add-generic-password",
+                "-a",
+                &user,
+                "-s",
+                "Claude Code-credentials",
+                "-w",
+                &creds_str,
+            ])
+            .output()?;
     }
 
     // Also save to file as fallback.
@@ -237,7 +244,10 @@ mod tests {
         let c = generate_code_challenge(&v);
         // S256 hash is 32 bytes = 43 base64url chars (no padding).
         assert_eq!(c.len(), 43);
-        assert!(c.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_'));
+        assert!(
+            c.chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+        );
     }
 
     #[test]

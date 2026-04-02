@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::{Mutex, mpsc, oneshot};
 
 /// Definition of an agent to spawn.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -57,14 +57,9 @@ impl AgentManager {
         let (work_tx, work_rx) = mpsc::channel(32);
         let name = def.name.clone();
 
-        let join = tokio::spawn(async move {
-            work(def, work_rx).await
-        });
+        let join = tokio::spawn(async move { work(def, work_rx).await });
 
-        let handle = AgentHandle {
-            tx: work_tx,
-            join,
-        };
+        let handle = AgentHandle { tx: work_tx, join };
 
         self.agents.lock().await.insert(name, handle);
         rx
@@ -100,12 +95,7 @@ impl AgentManager {
 
     /// List names of active agents.
     pub async fn active_agents(&self) -> Vec<String> {
-        self.agents
-            .lock()
-            .await
-            .keys()
-            .cloned()
-            .collect()
+        self.agents.lock().await.keys().cloned().collect()
     }
 }
 

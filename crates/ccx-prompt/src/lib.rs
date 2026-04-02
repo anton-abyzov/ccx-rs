@@ -1,8 +1,8 @@
 pub mod claudemd;
 pub mod system;
 
-pub use claudemd::{discover_claude_md, ClaudeMdFile};
-pub use system::{build_full_system_prompt, SkillInfo, ToolSchema};
+pub use claudemd::{ClaudeMdFile, discover_claude_md};
+pub use system::{SkillInfo, ToolSchema, build_full_system_prompt};
 
 /// Build the system prompt from components (legacy simple version).
 pub fn build_system_prompt(claude_md_files: &[ClaudeMdFile], working_dir: &str) -> String {

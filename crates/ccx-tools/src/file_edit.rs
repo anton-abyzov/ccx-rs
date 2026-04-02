@@ -67,14 +67,11 @@ impl Tool for FileEditTool {
 
         let path = Path::new(file_path);
         if !path.exists() {
-            return Err(ToolError::Execution(format!(
-                "file not found: {file_path}"
-            )));
+            return Err(ToolError::Execution(format!("file not found: {file_path}")));
         }
 
-        let content = fs::read_to_string(file_path).map_err(|e| {
-            ToolError::Execution(format!("failed to read {file_path}: {e}"))
-        })?;
+        let content = fs::read_to_string(file_path)
+            .map_err(|e| ToolError::Execution(format!("failed to read {file_path}: {e}")))?;
 
         let count = content.matches(old_string).count();
         if count == 0 {
@@ -98,9 +95,8 @@ impl Tool for FileEditTool {
         // Atomic write: write to temp file in same directory, then rename.
         // This prevents data loss if the process is interrupted during write.
         let tmp_path = format!("{file_path}.ccx_tmp_{}", std::process::id());
-        fs::write(&tmp_path, &new_content).map_err(|e| {
-            ToolError::Execution(format!("failed to write temp file: {e}"))
-        })?;
+        fs::write(&tmp_path, &new_content)
+            .map_err(|e| ToolError::Execution(format!("failed to write temp file: {e}")))?;
 
         if let Err(e) = fs::rename(&tmp_path, file_path) {
             // Clean up temp file on rename failure.
@@ -114,9 +110,7 @@ impl Tool for FileEditTool {
         let line_info = find_replacement_line(&content, old_string);
 
         Ok(ToolResult {
-            content: format!(
-                "Replaced {count} occurrence(s) in {file_path}{line_info}"
-            ),
+            content: format!("Replaced {count} occurrence(s) in {file_path}{line_info}"),
             is_error: false,
         })
     }
@@ -341,16 +335,15 @@ mod tests {
         assert!(!result.is_error);
 
         // Verify the file was updated and no temp file remains.
-        assert_eq!(
-            fs::read_to_string(&path).unwrap(),
-            "critical data here"
-        );
+        assert_eq!(fs::read_to_string(&path).unwrap(), "critical data here");
         let tmp_pattern = format!("{}.ccx_tmp_*", path.to_str().unwrap());
-        assert!(glob::glob(&tmp_pattern)
-            .unwrap()
-            .filter_map(|e| e.ok())
-            .count()
-            == 0);
+        assert!(
+            glob::glob(&tmp_pattern)
+                .unwrap()
+                .filter_map(|e| e.ok())
+                .count()
+                == 0
+        );
 
         let _ = fs::remove_dir_all(&dir);
     }

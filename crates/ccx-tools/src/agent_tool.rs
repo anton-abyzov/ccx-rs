@@ -69,9 +69,7 @@ impl Tool for AgentTool {
         let prompt = input["prompt"]
             .as_str()
             .ok_or_else(|| ToolError::InvalidInput("prompt is required".into()))?;
-        let description = input["description"]
-            .as_str()
-            .unwrap_or("sub-agent task");
+        let description = input["description"].as_str().unwrap_or("sub-agent task");
         let run_in_background = input["run_in_background"].as_bool().unwrap_or(false);
         let model_override = input["model"].as_str().map(|s| s.to_string());
         let agent_name = input["name"].as_str().map(|s| s.to_string());
@@ -235,28 +233,24 @@ async fn spawn_tmux_agent(
             is_error: false,
         })
     } else {
-        Err(ToolError::Execution(
-            "tmux split-window failed".into(),
-        ))
+        Err(ToolError::Execution("tmux split-window failed".into()))
     }
 }
 
 /// Find the ccx binary: same directory as current executable, or PATH.
 fn find_ccx_binary() -> Result<String, ToolError> {
     // Check next to the current executable.
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let ccx = dir.join("ccx");
-            if ccx.exists() {
-                return Ok(ccx.to_string_lossy().to_string());
-            }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        let ccx = dir.join("ccx");
+        if ccx.exists() {
+            return Ok(ccx.to_string_lossy().to_string());
         }
     }
 
     // Check PATH via `which`.
-    let output = std::process::Command::new("which")
-        .arg("ccx")
-        .output();
+    let output = std::process::Command::new("which").arg("ccx").output();
 
     match output {
         Ok(out) if out.status.success() => {

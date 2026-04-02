@@ -50,19 +50,18 @@ impl Tool for GlobTool {
         let full_pattern = base.join(pattern);
         let full_pattern_str = full_pattern.to_string_lossy();
 
-        let mut entries: Vec<(PathBuf, std::time::SystemTime)> =
-            glob::glob(&full_pattern_str)
-                .map_err(|e| ToolError::Execution(format!("invalid glob pattern: {e}")))?
-                .filter_map(|entry| entry.ok())
-                .filter_map(|path| {
-                    let mtime = path
-                        .metadata()
-                        .ok()
-                        .and_then(|m| m.modified().ok())
-                        .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-                    Some((path, mtime))
-                })
-                .collect();
+        let mut entries: Vec<(PathBuf, std::time::SystemTime)> = glob::glob(&full_pattern_str)
+            .map_err(|e| ToolError::Execution(format!("invalid glob pattern: {e}")))?
+            .filter_map(|entry| entry.ok())
+            .map(|path| {
+                let mtime = path
+                    .metadata()
+                    .ok()
+                    .and_then(|m| m.modified().ok())
+                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                (path, mtime)
+            })
+            .collect();
 
         // Sort by modification time, most recent first.
         entries.sort_by(|a, b| b.1.cmp(&a.1));

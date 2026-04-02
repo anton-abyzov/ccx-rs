@@ -2,6 +2,6 @@ pub mod auto;
 pub mod micro;
 pub mod tokens;
 
-pub use auto::{create_summary, should_compact, CompactSummary};
+pub use auto::{CompactSummary, create_summary, should_compact};
 pub use micro::micro_compact;
-pub use tokens::{estimate_tokens, exceeds_threshold, DEFAULT_THRESHOLD};
+pub use tokens::{DEFAULT_THRESHOLD, estimate_tokens, exceeds_threshold};

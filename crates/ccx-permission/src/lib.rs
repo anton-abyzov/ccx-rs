@@ -3,7 +3,7 @@ pub mod classifier;
 pub mod modes;
 pub mod rules;
 
-pub use cascade::{merge_cascade, PermissionSettings};
-pub use classifier::{classify_tool, decide, ToolCategory};
+pub use cascade::{PermissionSettings, merge_cascade};
+pub use classifier::{ToolCategory, classify_tool, decide};
 pub use modes::PermissionMode;
 pub use rules::{PermissionDecision, PermissionRule, RuleEffect, RuleSet};

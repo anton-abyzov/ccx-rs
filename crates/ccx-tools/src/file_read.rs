@@ -60,9 +60,7 @@ impl Tool for FileReadTool {
 
         // Check existence with specific error messages.
         if !path.exists() {
-            return Err(ToolError::Execution(format!(
-                "file not found: {file_path}"
-            )));
+            return Err(ToolError::Execution(format!("file not found: {file_path}")));
         }
 
         if path.is_dir() {
@@ -82,9 +80,8 @@ impl Tool for FileReadTool {
             ext.as_str(),
             "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg" | "pdf"
         ) {
-            let bytes = fs::read(file_path).map_err(|e| {
-                ToolError::Execution(format!("failed to read {file_path}: {e}"))
-            })?;
+            let bytes = fs::read(file_path)
+                .map_err(|e| ToolError::Execution(format!("failed to read {file_path}: {e}")))?;
             let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
             let mime = match ext.as_str() {
                 "png" => "image/png",
@@ -117,10 +114,7 @@ impl Tool for FileReadTool {
         // Binary file detection: check for null bytes in first chunk.
         if is_binary(&raw_bytes) {
             return Ok(ToolResult {
-                content: format!(
-                    "{file_path}: binary file ({})",
-                    format_file_size(file_size)
-                ),
+                content: format!("{file_path}: binary file ({})", format_file_size(file_size)),
                 is_error: false,
             });
         }
@@ -239,10 +233,7 @@ mod tests {
     async fn test_file_not_found() {
         let tool = FileReadTool;
         let err = tool
-            .execute(
-                json!({"file_path": "/nonexistent/file.txt"}),
-                &test_ctx(),
-            )
+            .execute(json!({"file_path": "/nonexistent/file.txt"}), &test_ctx())
             .await
             .unwrap_err();
         match err {

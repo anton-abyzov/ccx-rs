@@ -11,4 +11,10 @@
 .DS_Store
 Thumbs.db
 
+# Stale runtime files
+.ccx-teams.json
+.ccx-todos.json
+message-to-team-lead.txt
+research-*.md
+
 # Cargo (Cargo.lock committed for reproducible binary builds)

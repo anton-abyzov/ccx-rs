@@ -1,4 +1,4 @@
-use crate::tokens::{estimate_tokens, DEFAULT_THRESHOLD};
+use crate::tokens::{DEFAULT_THRESHOLD, estimate_tokens};
 
 /// Summary of a compacted conversation.
 #[derive(Debug, Clone)]

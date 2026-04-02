@@ -8,20 +8,16 @@ pub struct GrepTool;
 
 /// Find ripgrep binary — check PATH first, then common install locations.
 fn which_rg() -> String {
-    if let Ok(output) = std::process::Command::new("which").arg("rg").output() {
-        if output.status.success() {
-            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !path.is_empty() {
-                return path;
-            }
+    if let Ok(output) = std::process::Command::new("which").arg("rg").output()
+        && output.status.success()
+    {
+        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !path.is_empty() {
+            return path;
         }
     }
     // Common fallback paths
-    for path in &[
-        "/opt/homebrew/bin/rg",
-        "/usr/local/bin/rg",
-        "/usr/bin/rg",
-    ] {
+    for path in &["/opt/homebrew/bin/rg", "/usr/local/bin/rg", "/usr/bin/rg"] {
         if std::path::Path::new(path).exists() {
             return path.to_string();
         }
@@ -114,7 +110,9 @@ impl Tool for GrepTool {
             .map(String::from)
             .unwrap_or_else(|| ctx.working_dir.to_string_lossy().to_string());
 
-        let output_mode = input["output_mode"].as_str().unwrap_or("files_with_matches");
+        let output_mode = input["output_mode"]
+            .as_str()
+            .unwrap_or("files_with_matches");
         let head_limit = input["head_limit"].as_u64().unwrap_or(250) as usize;
         let offset = input["offset"].as_u64().unwrap_or(0) as usize;
 
@@ -254,11 +252,7 @@ mod tests {
             return;
         }
         let dir = setup_test_dir("ccx_test_grep");
-        fs::write(
-            dir.join("test.txt"),
-            "hello world\nfoo bar\nhello again\n",
-        )
-        .unwrap();
+        fs::write(dir.join("test.txt"), "hello world\nfoo bar\nhello again\n").unwrap();
 
         let tool = GrepTool;
         let result = tool
@@ -300,11 +294,7 @@ mod tests {
             return;
         }
         let dir = setup_test_dir("ccx_test_grep_content");
-        fs::write(
-            dir.join("test.txt"),
-            "line1\ntarget line\nline3\n",
-        )
-        .unwrap();
+        fs::write(dir.join("test.txt"), "line1\ntarget line\nline3\n").unwrap();
 
         let tool = GrepTool;
         let result = tool
@@ -330,11 +320,7 @@ mod tests {
             return;
         }
         let dir = setup_test_dir("ccx_test_grep_count");
-        fs::write(
-            dir.join("test.txt"),
-            "hello\nhello\nhello\nworld\n",
-        )
-        .unwrap();
+        fs::write(dir.join("test.txt"), "hello\nhello\nhello\nworld\n").unwrap();
 
         let tool = GrepTool;
         let result = tool
@@ -359,11 +345,7 @@ mod tests {
             return;
         }
         let dir = setup_test_dir("ccx_test_grep_context");
-        fs::write(
-            dir.join("test.txt"),
-            "line1\nline2\nTARGET\nline4\nline5\n",
-        )
-        .unwrap();
+        fs::write(dir.join("test.txt"), "line1\nline2\nTARGET\nline4\nline5\n").unwrap();
 
         let tool = GrepTool;
         let result = tool
@@ -539,11 +521,7 @@ mod tests {
             return;
         }
         let dir = setup_test_dir("ccx_test_grep_before");
-        fs::write(
-            dir.join("test.txt"),
-            "before1\nbefore2\nTARGET\nafter\n",
-        )
-        .unwrap();
+        fs::write(dir.join("test.txt"), "before1\nbefore2\nTARGET\nafter\n").unwrap();
 
         let tool = GrepTool;
         let result = tool

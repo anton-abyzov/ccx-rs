@@ -61,7 +61,13 @@ fn pad_to(s: &str, target: usize) -> String {
 }
 
 /// Render the welcome panel with two-column layout.
-pub fn render_welcome(model: &str, auth_source: &str, cwd: &str, tools: usize, email: Option<&str>) {
+pub fn render_welcome(
+    model: &str,
+    auth_source: &str,
+    cwd: &str,
+    tools: usize,
+    email: Option<&str>,
+) {
     let width = term_width().min(80);
 
     // Narrow terminal fallback.
@@ -198,7 +204,11 @@ pub fn render_tool_end(success: bool, preview: &str) {
     let total = lines.len();
     let max_visible = 3;
 
-    let display_lines = if total > 5 { &lines[..max_visible] } else { &lines[..] };
+    let display_lines = if total > 5 {
+        &lines[..max_visible]
+    } else {
+        &lines[..]
+    };
 
     for (i, line) in display_lines.iter().enumerate() {
         let display = if line.chars().count() > 120 {
@@ -372,13 +382,14 @@ pub fn render_markdown(text: &str) {
         }
 
         // Numbered lists.
-        if let Some(dot_pos) = trimmed.find(". ") {
-            if dot_pos <= 3 && trimmed[..dot_pos].chars().all(|c| c.is_ascii_digit()) {
-                let num = &trimmed[..dot_pos];
-                let item = &trimmed[dot_pos + 2..];
-                println!("  {DIM}{num}.{RESET} {}", render_inline_md(item));
-                continue;
-            }
+        if let Some(dot_pos) = trimmed.find(". ")
+            && dot_pos <= 3
+            && trimmed[..dot_pos].chars().all(|c| c.is_ascii_digit())
+        {
+            let num = &trimmed[..dot_pos];
+            let item = &trimmed[dot_pos + 2..];
+            println!("  {DIM}{num}.{RESET} {}", render_inline_md(item));
+            continue;
         }
 
         // Regular line.
@@ -452,11 +463,11 @@ fn render_inline_md(text: &str) -> String {
                     result.push_str(BOLD);
                     result.push_str(&link_text);
                     result.push_str(RESET);
-                    result.push_str(" ");
+                    result.push(' ');
                     result.push_str(DIM);
-                    result.push_str("(");
+                    result.push('(');
                     result.push_str(&url);
-                    result.push_str(")");
+                    result.push(')');
                     result.push_str(RESET);
                     i = url_end + 1;
                     continue;
