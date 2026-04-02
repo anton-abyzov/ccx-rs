@@ -227,7 +227,11 @@ async fn spawn_tmux_agent(
     let (env_var, provider_args) = match provider {
         "openrouter" => (
             format!("OPENROUTER_API_KEY='{escaped_key}'"),
-            format!(" --provider openrouter"),
+            " --provider openrouter".to_string(),
+        ),
+        "openai" => (
+            format!("OPENAI_API_KEY='{escaped_key}'"),
+            " --provider openai".to_string(),
         ),
         _ => (format!("ANTHROPIC_API_KEY='{escaped_key}'"), String::new()),
     };
@@ -313,6 +317,9 @@ async fn run_inprocess_agent(
         "openrouter" => {
             ccx_api::ApiClient::OpenAi(ccx_api::OpenAiClient::openrouter(&api_key, &model))
         }
+        "openai" => {
+            ccx_api::ApiClient::OpenAi(ccx_api::OpenAiClient::openai(&api_key, &model))
+        }
         _ => ccx_api::ApiClient::Claude(ccx_api::ClaudeClient::new(&api_key, &model)),
     };
 
@@ -359,6 +366,9 @@ fn resolve_api_key(ctx: &ToolContext) -> Result<String, ToolError> {
     match ctx.provider.as_str() {
         "openrouter" => std::env::var("OPENROUTER_API_KEY")
             .map_err(|_| ToolError::Execution("OPENROUTER_API_KEY not set".into())),
+        "openai" => std::env::var("OPENAI_API_KEY")
+            .or_else(|_| std::env::var("CCX_OPENAI_KEY"))
+            .map_err(|_| ToolError::Execution("OPENAI_API_KEY not set".into())),
         _ => std::env::var("ANTHROPIC_API_KEY")
             .map_err(|_| ToolError::Execution("ANTHROPIC_API_KEY not set".into())),
     }
@@ -370,6 +380,10 @@ fn apply_provider_env(cmd: &mut tokio::process::Command, provider: &str, api_key
         "openrouter" => {
             cmd.env("OPENROUTER_API_KEY", api_key);
             cmd.arg("--provider").arg("openrouter");
+        }
+        "openai" => {
+            cmd.env("OPENAI_API_KEY", api_key);
+            cmd.arg("--provider").arg("openai");
         }
         _ => {
             cmd.env("ANTHROPIC_API_KEY", api_key);

@@ -46,6 +46,23 @@ impl OpenAiClient {
         }
     }
 
+    /// Create a client configured for direct OpenAI API access.
+    pub fn openai(api_key: &str, model: &str) -> Self {
+        let clean_key: String = api_key
+            .trim()
+            .trim_matches('"')
+            .trim_matches('\'')
+            .chars()
+            .filter(|c| c.is_ascii_graphic() || *c == ' ')
+            .collect();
+        Self {
+            http: reqwest::Client::new(),
+            api_key: clean_key,
+            base_url: "https://api.openai.com/v1".to_string(),
+            model: model.trim().to_string(),
+        }
+    }
+
     /// Returns the configured model.
     pub fn model(&self) -> &str {
         &self.model

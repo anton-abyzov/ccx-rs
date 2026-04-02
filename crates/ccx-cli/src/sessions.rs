@@ -1,12 +1,17 @@
-/// Session persistence matching Claude Code's layout.
+/// Session persistence for CCX.
 ///
-/// Storage:
+/// New storage (writes):
+///   ~/.ccx/sessions/{provider}/{project-hash}/{session-id}.jsonl
+///   ~/.ccx/sessions/{provider}/{project-hash}/{session-id}.meta.json
+///
+/// Legacy storage (read fallback):
 ///   ~/.claude/projects/{project-hash}/sessions/{session-id}.jsonl
 ///   ~/.claude/projects/{project-hash}/sessions/{session-id}.meta.json
 ///
 /// Project hash: hex of hashed absolute working directory path.
 /// JSONL: one `InputMessage` per line (full API message format).
 /// Meta: lightweight metadata for listing without loading messages.
+use std::collections::HashSet;
 use std::collections::hash_map::DefaultHasher;
 use std::fs;
 use std::hash::{Hash, Hasher};
@@ -36,6 +41,11 @@ pub struct SessionMeta {
 // Paths
 // ---------------------------------------------------------------------------
 
+/// CCX home directory (~/.ccx/).
+pub fn ccx_home() -> Option<PathBuf> {
+    dirs::home_dir().map(|h| h.join(".ccx"))
+}
+
 /// Deterministic hash of a project path for directory naming.
 fn project_hash(path: &str) -> String {
     let mut hasher = DefaultHasher::new();
@@ -43,15 +53,21 @@ fn project_hash(path: &str) -> String {
     format!("{:016x}", hasher.finish())
 }
 
-/// Sessions directory for a given project working directory.
-fn project_sessions_dir(cwd: &str) -> Option<PathBuf> {
-    let home = std::env::var_os("HOME").map(PathBuf::from)?;
-    Some(
-        home.join(".claude")
+/// Sessions directory for a given provider and project (new layout).
+/// Path: ~/.ccx/sessions/{provider}/{project-hash}/
+fn ccx_sessions_dir(provider: &str, cwd: &str) -> Option<PathBuf> {
+    ccx_home().map(|h| h.join("sessions").join(provider).join(project_hash(cwd)))
+}
+
+/// Legacy sessions directory (backward-compatible reads).
+/// Path: ~/.claude/projects/{project-hash}/sessions/
+fn legacy_sessions_dir(cwd: &str) -> Option<PathBuf> {
+    dirs::home_dir().map(|h| {
+        h.join(".claude")
             .join("projects")
             .join(project_hash(cwd))
-            .join("sessions"),
-    )
+            .join("sessions")
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -110,10 +126,11 @@ pub fn new_session_id() -> String {
 /// Write (or overwrite) the JSONL transcript for a session.
 pub fn save_session_messages(
     cwd: &str,
+    provider: &str,
     session_id: &str,
     messages: &[ccx_api::InputMessage],
 ) -> Result<(), String> {
-    let dir = project_sessions_dir(cwd).ok_or("cannot determine home directory")?;
+    let dir = ccx_sessions_dir(provider, cwd).ok_or("cannot determine home directory")?;
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
 
     let path = dir.join(format!("{session_id}.jsonl"));
@@ -126,8 +143,8 @@ pub fn save_session_messages(
 }
 
 /// Write (or update) session metadata.
-pub fn save_session_meta(meta: &SessionMeta) -> Result<(), String> {
-    let dir = project_sessions_dir(&meta.cwd).ok_or("cannot determine home directory")?;
+pub fn save_session_meta(meta: &SessionMeta, provider: &str) -> Result<(), String> {
+    let dir = ccx_sessions_dir(provider, &meta.cwd).ok_or("cannot determine home directory")?;
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
 
     let path = dir.join(format!("{}.meta.json", meta.id));
@@ -140,17 +157,24 @@ pub fn save_session_meta(meta: &SessionMeta) -> Result<(), String> {
 // ---------------------------------------------------------------------------
 
 /// Load session messages from JSONL, stripping thinking blocks.
+/// Checks new ~/.ccx/ path first, then falls back to legacy ~/.claude/ path.
 pub fn load_session_messages(
     cwd: &str,
+    provider: &str,
     session_id: &str,
 ) -> Result<Vec<ccx_api::InputMessage>, String> {
-    let dir = project_sessions_dir(cwd).ok_or("cannot determine home directory")?;
-    let path = dir.join(format!("{session_id}.jsonl"));
+    let path = ccx_sessions_dir(provider, cwd)
+        .map(|d| d.join(format!("{session_id}.jsonl")))
+        .filter(|p| p.exists())
+        .or_else(|| {
+            legacy_sessions_dir(cwd).map(|d| d.join(format!("{session_id}.jsonl")))
+        })
+        .ok_or(format!("session not found: {session_id}"))?;
     if !path.exists() {
         return Err(format!("session not found: {session_id}"));
     }
 
-    let file = fs::File::open(&path).map_err(|e| e.to_string())?;
+    let file = fs::File::open(path).map_err(|e| e.to_string())?;
     let reader = io::BufReader::new(file);
 
     let mut messages = Vec::new();
@@ -177,9 +201,13 @@ pub fn load_session_messages(
 }
 
 /// Find session metadata by ID within a project.
-pub fn find_session_meta(cwd: &str, session_id: &str) -> Option<SessionMeta> {
-    let dir = project_sessions_dir(cwd)?;
-    let path = dir.join(format!("{session_id}.meta.json"));
+/// Checks new ~/.ccx/ path first, then falls back to legacy ~/.claude/ path.
+pub fn find_session_meta(cwd: &str, provider: &str, session_id: &str) -> Option<SessionMeta> {
+    let filename = format!("{session_id}.meta.json");
+    let path = ccx_sessions_dir(provider, cwd)
+        .map(|d| d.join(&filename))
+        .filter(|p| p.exists())
+        .or_else(|| legacy_sessions_dir(cwd).map(|d| d.join(&filename)))?;
     let content = fs::read_to_string(path).ok()?;
     serde_json::from_str(&content).ok()
 }
@@ -189,33 +217,46 @@ pub fn find_session_meta(cwd: &str, session_id: &str) -> Option<SessionMeta> {
 // ---------------------------------------------------------------------------
 
 /// List sessions for a specific project, sorted by lastActive descending.
-pub fn list_sessions_for_project(cwd: &str) -> Vec<SessionMeta> {
-    let dir = match project_sessions_dir(cwd) {
-        Some(d) if d.exists() => d,
-        _ => return Vec::new(),
-    };
+/// Merges sessions from new ~/.ccx/ and legacy ~/.claude/ paths, deduplicating by ID.
+pub fn list_sessions_for_project(cwd: &str, provider: &str) -> Vec<SessionMeta> {
+    let mut seen_ids = HashSet::new();
+    let mut sessions = Vec::new();
 
-    let mut sessions: Vec<SessionMeta> = fs::read_dir(&dir)
-        .ok()
-        .into_iter()
-        .flatten()
-        .filter_map(|entry| {
-            let path = entry.ok()?.path();
-            if !path.to_string_lossy().ends_with(".meta.json") {
-                return None;
+    // Collect from both new and legacy directories.
+    let dirs: Vec<PathBuf> = [
+        ccx_sessions_dir(provider, cwd),
+        legacy_sessions_dir(cwd),
+    ]
+    .into_iter()
+    .flatten()
+    .filter(|d| d.exists())
+    .collect();
+
+    for dir in dirs {
+        if let Ok(entries) = fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if !path.to_string_lossy().ends_with(".meta.json") {
+                    continue;
+                }
+                if let Ok(content) = fs::read_to_string(&path) {
+                    if let Ok(meta) = serde_json::from_str::<SessionMeta>(&content) {
+                        if seen_ids.insert(meta.id.clone()) {
+                            sessions.push(meta);
+                        }
+                    }
+                }
             }
-            let content = fs::read_to_string(&path).ok()?;
-            serde_json::from_str(&content).ok()
-        })
-        .collect();
+        }
+    }
 
     sessions.sort_by(|a, b| b.last_active.cmp(&a.last_active));
     sessions
 }
 
 /// Find the most recent session for a given working directory.
-pub fn find_latest_for_cwd(cwd: &str) -> Option<SessionMeta> {
-    list_sessions_for_project(cwd).into_iter().next()
+pub fn find_latest_for_cwd(cwd: &str, provider: &str) -> Option<SessionMeta> {
+    list_sessions_for_project(cwd, provider).into_iter().next()
 }
 
 // ---------------------------------------------------------------------------
@@ -223,18 +264,26 @@ pub fn find_latest_for_cwd(cwd: &str) -> Option<SessionMeta> {
 // ---------------------------------------------------------------------------
 
 /// Delete oldest sessions exceeding `max_sessions` for a project.
-pub fn cleanup_sessions(cwd: &str, max_sessions: usize) {
-    let sessions = list_sessions_for_project(cwd);
+pub fn cleanup_sessions(cwd: &str, provider: &str, max_sessions: usize) {
+    let sessions = list_sessions_for_project(cwd, provider);
     if sessions.len() <= max_sessions {
         return;
     }
-    let dir = match project_sessions_dir(cwd) {
-        Some(d) => d,
-        None => return,
-    };
+    // Clean up from both new and legacy directories.
+    let dirs: Vec<PathBuf> = [
+        ccx_sessions_dir(provider, cwd),
+        legacy_sessions_dir(cwd),
+    ]
+    .into_iter()
+    .flatten()
+    .filter(|d| d.exists())
+    .collect();
+
     for old in &sessions[max_sessions..] {
-        let _ = fs::remove_file(dir.join(format!("{}.jsonl", old.id)));
-        let _ = fs::remove_file(dir.join(format!("{}.meta.json", old.id)));
+        for dir in &dirs {
+            let _ = fs::remove_file(dir.join(format!("{}.jsonl", old.id)));
+            let _ = fs::remove_file(dir.join(format!("{}.meta.json", old.id)));
+        }
     }
 }
 

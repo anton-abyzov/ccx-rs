@@ -109,7 +109,7 @@ enum Commands {
         #[arg(long)]
         sandbox: bool,
 
-        /// Provider: anthropic (default), openrouter
+        /// Provider: anthropic (default), openrouter, openai
         #[arg(long, default_value = "anthropic")]
         provider: String,
 
@@ -494,6 +494,9 @@ async fn run_chat(
     // Resolve client based on provider. Also capture the resolved key and effective provider
     // so the Agent tool can pass them to sub-agents.
     let or_key_env = std::env::var("OPENROUTER_API_KEY").ok();
+    let oi_key_env = std::env::var("OPENAI_API_KEY")
+        .or_else(|_| std::env::var("CCX_OPENAI_KEY"))
+        .ok();
 
     let (client, auth_source, email, no_auth, resolved_api_key, effective_provider): (
         ccx_api::ApiClient,
@@ -516,6 +519,21 @@ async fn run_chat(
                 false,
                 key.to_string(),
                 "openrouter".to_string(),
+            )
+        }
+        "openai" => {
+            let key = oi_key_env.as_deref().ok_or(
+                "OpenAI API key required: set OPENAI_API_KEY or CCX_OPENAI_KEY",
+            )?;
+            let client =
+                ccx_api::ApiClient::OpenAi(ccx_api::OpenAiClient::openai(key, model));
+            (
+                client,
+                "OpenAI".to_string(),
+                None,
+                false,
+                key.to_string(),
+                "openai".to_string(),
             )
         }
         _ => {
@@ -547,7 +565,7 @@ async fn run_chat(
                     )
                 }
                 Err(_) => {
-                    // Before giving up, check if OpenRouter key is available.
+                    // Auto-detect: try OpenRouter, then OpenAI, then give up.
                     if let Some(ref or_key) = or_key_env {
                         if !or_key.is_empty() {
                             let client = ccx_api::ApiClient::OpenAi(
@@ -561,8 +579,69 @@ async fn run_chat(
                                 or_key.clone(),
                                 "openrouter".to_string(),
                             )
+                        } else if let Some(ref oi_key) = oi_key_env {
+                            if !oi_key.is_empty() {
+                                let client = ccx_api::ApiClient::OpenAi(
+                                    ccx_api::OpenAiClient::openai(oi_key, model),
+                                );
+                                (
+                                    client,
+                                    "OpenAI (auto-detected)".to_string(),
+                                    None,
+                                    false,
+                                    oi_key.clone(),
+                                    "openai".to_string(),
+                                )
+                            } else {
+                                print_auth_guide(print_mode);
+                                if print_mode {
+                                    std::process::exit(1);
+                                }
+                                let auth = ccx_auth::AuthMethod::None;
+                                let client = ccx_api::ApiClient::Claude(
+                                    ccx_api::ClaudeClient::with_auth(&auth, model),
+                                );
+                                (
+                                    client,
+                                    auth.display_label().to_string(),
+                                    None,
+                                    true,
+                                    String::new(),
+                                    "anthropic".to_string(),
+                                )
+                            }
                         } else {
-                            // No credentials at all — show guide.
+                            print_auth_guide(print_mode);
+                            if print_mode {
+                                std::process::exit(1);
+                            }
+                            let auth = ccx_auth::AuthMethod::None;
+                            let client = ccx_api::ApiClient::Claude(
+                                ccx_api::ClaudeClient::with_auth(&auth, model),
+                            );
+                            (
+                                client,
+                                auth.display_label().to_string(),
+                                None,
+                                true,
+                                String::new(),
+                                "anthropic".to_string(),
+                            )
+                        }
+                    } else if let Some(ref oi_key) = oi_key_env {
+                        if !oi_key.is_empty() {
+                            let client = ccx_api::ApiClient::OpenAi(
+                                ccx_api::OpenAiClient::openai(oi_key, model),
+                            );
+                            (
+                                client,
+                                "OpenAI (auto-detected)".to_string(),
+                                None,
+                                false,
+                                oi_key.clone(),
+                                "openai".to_string(),
+                            )
+                        } else {
                             print_auth_guide(print_mode);
                             if print_mode {
                                 std::process::exit(1);
@@ -581,7 +660,6 @@ async fn run_chat(
                             )
                         }
                     } else {
-                        // No credentials at all — show guide.
                         print_auth_guide(print_mode);
                         if print_mode {
                             std::process::exit(1);
@@ -679,11 +757,19 @@ async fn run_chat(
         system_prompt.push_str(extra);
     }
 
-    // Wire memory: load memories and inject into system prompt.
-    let memory_dir = dirs::home_dir()
+    // Wire memory: load from ~/.ccx/memory, fall back to ~/.claude/memory.
+    let ccx_memory_dir = sessions::ccx_home()
+        .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".ccx"))
+        .join("memory");
+    let legacy_memory_dir = dirs::home_dir()
         .unwrap_or_default()
         .join(".claude")
         .join("memory");
+    let memory_dir = if ccx_memory_dir.exists() {
+        ccx_memory_dir
+    } else {
+        legacy_memory_dir
+    };
     let memory_store = ccx_memory::MemoryStore::new(memory_dir);
     if let Ok(index) = memory_store.load_index()
         && !index.is_empty()
@@ -799,6 +885,7 @@ async fn run_chat(
                 continue_session,
                 effort,
                 no_auth,
+                &effective_provider,
             )
             .await?;
         }
@@ -1278,6 +1365,7 @@ async fn run_inline_mode(
     continue_session: bool,
     effort: &str,
     mut no_auth: bool,
+    effective_provider: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let tool_count = tool_names.len();
     let mut current_model = model.to_string();
@@ -1324,8 +1412,8 @@ async fn run_inline_mode(
 
     // Handle --continue flag.
     if continue_session {
-        match sessions::find_latest_for_cwd(&cwd_str) {
-            Some(meta) => match sessions::load_session_messages(&cwd_str, &meta.id) {
+        match sessions::find_latest_for_cwd(&cwd_str, &effective_provider) {
+            Some(meta) => match sessions::load_session_messages(&cwd_str, &effective_provider, &meta.id) {
                 Ok(messages) if !messages.is_empty() => {
                     let count = messages.len();
                     agent.set_messages(messages);
@@ -1346,7 +1434,7 @@ async fn run_inline_mode(
     } else if let Some(id) = resume_id {
         if id.is_empty() {
             // --resume without ID: list sessions.
-            let all = sessions::list_sessions_for_project(&cwd_str);
+            let all = sessions::list_sessions_for_project(&cwd_str, &effective_provider);
             if all.is_empty() {
                 println!("\x1b[90mNo saved sessions for this directory.\x1b[0m");
             } else {
@@ -1367,10 +1455,10 @@ async fn run_inline_mode(
             }
         } else {
             // --resume <id>: load specific session.
-            match sessions::load_session_messages(&cwd_str, id) {
+            match sessions::load_session_messages(&cwd_str, &effective_provider, id) {
                 Ok(messages) if !messages.is_empty() => {
                     let count = messages.len();
-                    let meta = sessions::find_session_meta(&cwd_str, id);
+                    let meta = sessions::find_session_meta(&cwd_str, &effective_provider, id);
                     session_turns = meta.as_ref().map(|m| m.turns).unwrap_or(0);
                     first_preview = meta.as_ref().map(|m| m.preview.clone()).unwrap_or_default();
                     agent.set_messages(messages);
@@ -1525,10 +1613,10 @@ async fn run_inline_mode(
                         }
                         "/resume" => {
                             if let Some(sid) = cmd_args {
-                                match sessions::load_session_messages(&cwd_str, sid) {
+                                match sessions::load_session_messages(&cwd_str, &effective_provider, sid) {
                                     Ok(messages) if !messages.is_empty() => {
                                         let count = messages.len();
-                                        let meta = sessions::find_session_meta(&cwd_str, sid);
+                                        let meta = sessions::find_session_meta(&cwd_str, &effective_provider, sid);
                                         let turns = meta.as_ref().map(|m| m.turns).unwrap_or(0);
                                         first_preview = meta
                                             .as_ref()
@@ -1548,7 +1636,7 @@ async fn run_inline_mode(
                                     Err(e) => println!("\x1b[31m{e}\x1b[0m"),
                                 }
                             } else {
-                                let all = sessions::list_sessions_for_project(&cwd_str);
+                                let all = sessions::list_sessions_for_project(&cwd_str, &effective_provider);
                                 if all.is_empty() {
                                     println!("\x1b[90mNo saved sessions.\x1b[0m");
                                 } else {
@@ -1569,9 +1657,9 @@ async fn run_inline_mode(
                             true
                         }
                         "/continue" => {
-                            match sessions::find_latest_for_cwd(&cwd_str) {
+                            match sessions::find_latest_for_cwd(&cwd_str, &effective_provider) {
                                 Some(meta) => {
-                                    match sessions::load_session_messages(&cwd_str, &meta.id) {
+                                    match sessions::load_session_messages(&cwd_str, &effective_provider, &meta.id) {
                                         Ok(messages) if !messages.is_empty() => {
                                             let count = messages.len();
                                             agent.set_messages(messages);
@@ -1683,7 +1771,7 @@ async fn run_inline_mode(
                             true
                         }
                         "/sessions" => {
-                            let all = sessions::list_sessions_for_project(&cwd_str);
+                            let all = sessions::list_sessions_for_project(&cwd_str, &effective_provider);
                             if all.is_empty() {
                                 println!("\x1b[90mNo saved sessions for this directory.\x1b[0m");
                             } else {
@@ -1994,7 +2082,7 @@ async fn run_inline_mode(
                 session_turns += 1;
 
                 // Incremental session save after each turn.
-                let _ = sessions::save_session_messages(&cwd_str, &session_id, agent.messages());
+                let _ = sessions::save_session_messages(&cwd_str, &effective_provider, &session_id, agent.messages());
                 let _ = sessions::save_session_meta(&sessions::SessionMeta {
                     id: session_id.clone(),
                     cwd: cwd_str.clone(),
@@ -2006,7 +2094,7 @@ async fn run_inline_mode(
                     turns: session_turns,
                     total_tokens: agent.cost().total_input_tokens
                         + agent.cost().total_output_tokens,
-                });
+                }, &effective_provider);
 
                 ccx_tui::inline::render_separator();
             }
@@ -2020,7 +2108,7 @@ async fn run_inline_mode(
 
     // Final session save and cleanup.
     if session_turns > 0 {
-        let _ = sessions::save_session_messages(&cwd_str, &session_id, agent.messages());
+        let _ = sessions::save_session_messages(&cwd_str, &effective_provider, &session_id, agent.messages());
         let _ = sessions::save_session_meta(&sessions::SessionMeta {
             id: session_id.clone(),
             cwd: cwd_str.clone(),
@@ -2035,8 +2123,8 @@ async fn run_inline_mode(
             name: None,
             turns: session_turns,
             total_tokens: agent.cost().total_input_tokens + agent.cost().total_output_tokens,
-        });
-        sessions::cleanup_sessions(&cwd_str, 100);
+        }, &effective_provider);
+        sessions::cleanup_sessions(&cwd_str, &effective_provider, 100);
     }
 
     // Save history for next session.
