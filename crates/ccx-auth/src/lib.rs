@@ -9,7 +9,7 @@ pub enum AuthError {
     #[error("no API key found: set ANTHROPIC_API_KEY or add it to ~/.claude/config.json")]
     NoKeyFound,
 
-    #[error("no credentials found: set ANTHROPIC_API_KEY or log in with Claude Code")]
+    #[error("no credentials found: set ANTHROPIC_API_KEY or run ccx /login")]
     NoCredentials,
 
     #[error("config file error: {0}")]
@@ -42,7 +42,7 @@ pub struct ResolvedKey {
 pub enum AuthMethod {
     /// Traditional API key authentication.
     ApiKey(ResolvedKey),
-    /// OAuth token from Claude Code subscription (Max, Pro, Team).
+    /// OAuth token from Claude subscription (Max, Pro, Team).
     OAuthToken {
         access_token: String,
         api_key: Option<String>,
@@ -106,8 +106,8 @@ pub async fn fetch_oauth_email(access_token: &str) -> Option<String> {
 /// Resolve authentication from all available sources, in priority order:
 /// 1. Explicit API key (if provided)
 /// 2. ANTHROPIC_API_KEY environment variable
-/// 3. Claude Code OAuth token from macOS Keychain
-/// 4. Claude Code OAuth token from ~/.claude/.credentials.json
+/// 3. OAuth token from macOS Keychain (compatible with Claude Code credentials)
+/// 4. OAuth token from ~/.claude/.credentials.json
 /// 5. API key from ~/.claude/config.json
 pub fn resolve_auth(explicit: Option<&str>) -> Result<AuthMethod, AuthError> {
     // 1. Explicit key takes priority.
@@ -210,7 +210,7 @@ pub fn resolve_api_key(explicit: Option<&str>) -> Result<ResolvedKey, AuthError>
     Err(AuthError::NoKeyFound)
 }
 
-/// Read OAuth token from macOS Keychain (Claude Code stores it there).
+/// Read OAuth token from macOS Keychain (reads credentials stored by Claude Code).
 fn read_keychain_token() -> Option<AuthMethod> {
     let user = std::env::var("USER").ok()?;
     let output = std::process::Command::new("security")
@@ -240,7 +240,7 @@ fn read_credentials_file() -> Option<AuthMethod> {
     parse_oauth_json(&content)
 }
 
-/// Parse Claude Code OAuth JSON and return an AuthMethod if valid and not expired.
+/// Parse OAuth JSON (Claude Code credential format) and return an AuthMethod if valid and not expired.
 fn parse_oauth_json(json: &str) -> Option<AuthMethod> {
     let v: serde_json::Value = serde_json::from_str(json).ok()?;
     let oauth = v.get("claudeAiOauth").or_else(|| v.get("claudeAiOAuth"));

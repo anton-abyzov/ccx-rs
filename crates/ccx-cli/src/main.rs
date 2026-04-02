@@ -397,7 +397,14 @@ async fn run_auth(action: &str) {
             println!();
         }
         "login" => {
-            match ccx_auth::oauth::login().await {
+            let login_result = if claude_cli_available() {
+                println!("Launching Claude auth...");
+                run_claude_cli_login()
+            } else {
+                ccx_auth::oauth::login().await.map(|_| ())
+            };
+
+            match login_result {
                 Ok(_) => println!("\x1b[32m✓ Login successful!\x1b[0m"),
                 Err(e) => eprintln!("\x1b[31mLogin failed: {e}\x1b[0m"),
             }
@@ -425,6 +432,25 @@ async fn run_auth(action: &str) {
         _ => {
             println!("Usage: ccx auth [status|login|logout]");
         }
+    }
+}
+
+fn claude_cli_available() -> bool {
+    std::process::Command::new("claude")
+        .arg("--version")
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
+fn run_claude_cli_login() -> Result<(), Box<dyn std::error::Error>> {
+    match std::process::Command::new("claude")
+        .args(["auth", "login"])
+        .status()
+    {
+        Ok(status) if status.success() => Ok(()),
+        Ok(_) => Err("Claude auth failed".into()),
+        Err(err) => Err(Box::new(err)),
     }
 }
 
@@ -2508,67 +2534,24 @@ async fn run_inline_mode(
                             true
                         }
                         "/login" => {
-                            let claude_available = std::process::Command::new("claude")
-                                .arg("--version")
-                                .output()
-                                .map(|o| o.status.success())
-                                .unwrap_or(false);
-
-                            let login_result = if claude_available {
+                            let login_result = if claude_cli_available() {
                                 println!("Launching Claude auth...");
-                                let status = std::process::Command::new("claude")
-                                    .args(["auth", "login"])
-                                    .status();
-                                match status {
-                                    Ok(s) if s.success() => Ok(ccx_auth::oauth::OAuthTokens {
-                                        access_token: String::new(),
-                                        refresh_token: None,
-                                        api_key: None,
-                                        subscription_type: None,
-                                    }),
-                                    Ok(_) => Err("Claude auth failed".into()),
-                                    Err(e) => Err(Box::new(e) as Box<dyn std::error::Error>),
-                                }
+                                run_claude_cli_login().map(|_| ccx_auth::oauth::OAuthTokens {
+                                    access_token: String::new(),
+                                    refresh_token: None,
+                                    api_key: None,
+                                    subscription_type: None,
+                                })
                             } else {
                                 ccx_auth::oauth::login().await
                             };
 
                             match login_result {
                                 Ok(_) => {
-                                    println!(
-                                        "\x1b[32mLogin successful!\x1b[0m Restart ccx to use your subscription."
-                                    );
+                                    println!("\x1b[32mLogin successful!\x1b[0m");
                                     // Re-check auth after login.
                                     if let Ok(auth) = ccx_auth::resolve_auth(None) {
-                                        let mut auth = hydrate_runtime_oauth(auth).await;
-                                        let needs_scope_refresh = matches!(
-                                            &auth,
-                                            ccx_auth::AuthMethod::OAuthToken { api_key: None, .. }
-                                        );
-
-                                        if needs_scope_refresh {
-                                            println!(
-                                                "\x1b[90mRefreshing OAuth session for CCX...\x1b[0m"
-                                            );
-                                            match ccx_auth::oauth::login().await {
-                                                Ok(tokens) => {
-                                                    auth = ccx_auth::AuthMethod::OAuthToken {
-                                                        access_token: tokens.access_token.clone(),
-                                                        api_key: tokens.api_key.clone(),
-                                                        subscription_type: tokens
-                                                            .subscription_type
-                                                            .clone()
-                                                            .unwrap_or_else(|| "unknown".to_string()),
-                                                    };
-                                                }
-                                                Err(e) => {
-                                                    println!(
-                                                        "\x1b[31mCCX OAuth refresh failed: {e}\x1b[0m"
-                                                    );
-                                                }
-                                            }
-                                        }
-
+                                        let auth = hydrate_runtime_oauth(auth).await;
                                         if !auth.is_none() {
                                             no_auth = false;
                                             let new_client = ccx_api::ApiClient::Claude(
@@ -3155,7 +3138,7 @@ async fn run_inline_mode(
                         ccx_tui::inline::render_error("  2. Use a free model:");
                         ccx_tui::inline::render_error("     export OPENROUTER_API_KEY=\"your-key-from-openrouter.ai/keys\"");
                         ccx_tui::inline::render_error("     ccx --model nemotron");
-                        ccx_tui::inline::render_error("  3. Use a different Claude API key:");
+                        ccx_tui::inline::render_error("  3. Use a different Anthropic API key:");
                         ccx_tui::inline::render_error("     export ANTHROPIC_API_KEY=\"sk-ant-...\"");
                     }
                     Err(e) => {

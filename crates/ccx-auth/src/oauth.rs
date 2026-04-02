@@ -27,10 +27,10 @@ pub struct OAuthTokens {
 /// Run the full OAuth Authorization Code + PKCE flow.
 /// Opens a browser, waits for callback, exchanges code for tokens, saves credentials.
 pub async fn login() -> Result<OAuthTokens, Box<dyn std::error::Error>> {
-    if should_use_manual_oauth() {
-        return login_with_manual_callback().await;
+    if should_use_local_callback_oauth() {
+        return login_with_local_callback().await;
     }
-    login_with_local_callback().await
+    login_with_manual_callback().await
 }
 
 async fn login_with_local_callback() -> Result<OAuthTokens, Box<dyn std::error::Error>> {
@@ -38,7 +38,7 @@ async fn login_with_local_callback() -> Result<OAuthTokens, Box<dyn std::error::
     let code_challenge = generate_code_challenge(&code_verifier);
     let state = generate_state();
 
-    // Claude Code's default auth flow uses a localhost callback.
+    // Optional localhost callback flow for environments that support it.
     let listener = TcpListener::bind("127.0.0.1:0")?;
     let port = listener.local_addr()?.port();
     let redirect_uri = format!("http://localhost:{port}/callback");
@@ -134,9 +134,9 @@ fn build_auth_url(redirect_uri: &str, code_challenge: &str, state: &str) -> Stri
     )
 }
 
-fn should_use_manual_oauth() -> bool {
+fn should_use_local_callback_oauth() -> bool {
     matches!(
-        std::env::var("CCX_OAUTH_MANUAL").ok().as_deref(),
+        std::env::var("CCX_OAUTH_LOCALHOST").ok().as_deref(),
         Some("1" | "true" | "TRUE" | "yes" | "YES")
     )
 }
