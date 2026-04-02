@@ -19,8 +19,12 @@ struct Cli {
     command: Option<Commands>,
 
     /// Logging level (trace, debug, info, warn, error)
-    #[arg(long, global = true, default_value = "info")]
+    #[arg(long, global = true, default_value = "warn")]
     log_level: String,
+
+    /// Enable debug logging (shorthand for --log-level debug)
+    #[arg(long, global = true)]
+    debug: bool,
 
     // ── Top-level flags forwarded to Chat when no subcommand given ──
     /// Model to use
@@ -153,15 +157,19 @@ enum Commands {
 async fn main() {
     let cli = Cli::parse();
 
-    // Initialize logging
-    let level = cli.log_level.to_lowercase();
-    let filter = match level.as_str() {
-        "trace" => log::LevelFilter::Trace,
-        "debug" => log::LevelFilter::Debug,
-        "info" => log::LevelFilter::Info,
-        "warn" => log::LevelFilter::Warn,
-        "error" => log::LevelFilter::Error,
-        _ => log::LevelFilter::Info,
+    // Initialize logging: default to warn, --debug overrides to debug level
+    let filter = if cli.debug {
+        log::LevelFilter::Debug
+    } else {
+        let level = cli.log_level.to_lowercase();
+        match level.as_str() {
+            "trace" => log::LevelFilter::Trace,
+            "debug" => log::LevelFilter::Debug,
+            "info" => log::LevelFilter::Info,
+            "warn" => log::LevelFilter::Warn,
+            "error" => log::LevelFilter::Error,
+            _ => log::LevelFilter::Warn,
+        }
     };
     env_logger::builder()
         .filter_level(filter)
@@ -169,7 +177,7 @@ async fn main() {
         .format_timestamp(None)
         .init();
 
-    log::info!("Starting ccx with log level: {}", cli.log_level);
+    log::debug!("Starting ccx with log level: {:?}", filter);
 
     // GAP 1: default to Chat when no subcommand given.
     let command = cli.command.unwrap_or_else(|| {

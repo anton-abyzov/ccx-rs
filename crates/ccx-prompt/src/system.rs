@@ -82,6 +82,12 @@ const GUIDELINES: &str = "
 - Report errors clearly with actionable next steps
 - When exploring the codebase, summarize findings concisely. Do not dump entire file contents to the user — provide a brief summary of what you found.
 
+# Action-Oriented Behavior
+When working on a task, do NOT explain your thought process out loud. Just act.
+Do NOT say \"I need to...\", \"Let me...\", \"I'll use...\" — just call the tool directly.
+Be concise. Output only the final result, not your reasoning steps.
+Do NOT narrate what you are about to do — just do it.
+
 # Safety
 - Never execute destructive commands (rm -rf, force push) without explicit confirmation
 - Don't expose secrets, API keys, or credentials in output
@@ -201,6 +207,14 @@ fn build_skills_section(skills: &[SkillInfo]) -> String {
     s += "- \"commit changes\" → suggest `/commit`\n";
     s += "- \"what's next\" / \"status\" → suggest `/sw:progress`\n";
     s += "- \"team\" / \"parallel agents\" → suggest `/sw:team-lead`\n";
+    s += "\n";
+    s += "### IMPORTANT — Skill invocation rules:\n";
+    s += "Skills (commands starting with /) are invoked by the USER in the chat input, NOT by you.\n";
+    s += "Do NOT try to run skills via the Bash tool. If the user asks for something that matches a skill,\n";
+    s += "tell them to type the slash command. For example:\n";
+    s += "  - \"Create an increment\" → Tell user: \"Type `/sw:increment` to create an increment\"\n";
+    s += "  - \"Simplify the code\" → Tell user: \"Type `/simplify` to run code simplification\"\n";
+    s += "You can only use the tools listed in the Available Tools section above.\n";
 
     s
 }

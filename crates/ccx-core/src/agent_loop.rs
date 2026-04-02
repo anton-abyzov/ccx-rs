@@ -3,7 +3,7 @@ use ccx_api::{
     StreamEvent, ThinkingConfig,
 };
 use futures::StreamExt;
-use log::{debug, error, info, trace, warn};
+use log::{debug, error, trace, warn};
 
 use crate::context::ToolContext;
 use crate::cost::CostTracker;
@@ -254,7 +254,7 @@ impl AgentLoop {
         user_text: &str,
         callback: &mut dyn AgentCallback,
     ) -> Result<String, AgentLoopError> {
-        info!(
+        debug!(
             "Starting agent loop for user message (len: {})",
             user_text.len()
         );
@@ -437,7 +437,7 @@ impl AgentLoop {
                 })
                 .unwrap_or_default();
 
-            info!("Agent loop completed after {} turns", turn);
+            debug!("Agent loop completed after {} turns", turn);
             return Ok(final_text);
         }
     }

@@ -103,11 +103,31 @@ pub async fn register_mcp_tools(
     let mut clients = Vec::new();
 
     for (name, server) in &config.mcp_servers {
+        // Check if the MCP server command exists before attempting to spawn it.
+        let cmd_name = server.command.split('/').last().unwrap_or(&server.command);
+        let cmd_exists = std::process::Command::new("which")
+            .arg(&server.command)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+
+        if !cmd_exists {
+            // Dim warning — not a loud error
+            eprintln!(
+                "\x1b[2m\u{26a0} MCP server '{name}' unavailable ({cmd_name} not found)\x1b[0m"
+            );
+            continue;
+        }
+
         let args_refs: Vec<&str> = server.args.iter().map(|s| s.as_str()).collect();
         match McpClient::connect(name.clone(), &server.command, &args_refs) {
             Ok(mut client) => {
-                if let Err(e) = client.initialize().await {
-                    eprintln!("MCP [{name}]: init failed: {e}");
+                if let Err(_e) = client.initialize().await {
+                    eprintln!(
+                        "\x1b[2m\u{26a0} MCP server '{name}' unavailable (server failed to initialize)\x1b[0m"
+                    );
                     continue;
                 }
                 match client.list_tools().await {
@@ -118,16 +138,20 @@ pub async fn register_mcp_tools(
                             let bridge = McpToolBridge::new(Arc::clone(&client), tool);
                             registry.register(Box::new(bridge));
                         }
-                        eprintln!("MCP [{name}]: {tool_count} tools registered");
+                        log::debug!("MCP [{name}]: {tool_count} tools registered");
                         clients.push(client);
                     }
-                    Err(e) => {
-                        eprintln!("MCP [{name}]: list_tools failed: {e}");
+                    Err(_e) => {
+                        eprintln!(
+                            "\x1b[2m\u{26a0} MCP server '{name}' unavailable (failed to list tools)\x1b[0m"
+                        );
                     }
                 }
             }
-            Err(e) => {
-                eprintln!("MCP [{name}]: connect failed: {e}");
+            Err(_e) => {
+                eprintln!(
+                    "\x1b[2m\u{26a0} MCP server '{name}' unavailable (connection failed)\x1b[0m"
+                );
             }
         }
     }
