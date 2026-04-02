@@ -1,12 +1,12 @@
-# CCX-RS — Community Claude Code eXtended
+# CCX-RS — Community Code Extended
 
 [![Release](https://img.shields.io/github/v/release/anton-abyzov/ccx-rs?style=flat-square)](https://github.com/anton-abyzov/ccx-rs/releases)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue?style=flat-square)](LICENSE)
 [![Tests](https://img.shields.io/badge/tests-280%20passing-brightgreen?style=flat-square)]()
 
-**The power of a 512K-line AI coding assistant in a 4.7MB binary.** Free, open-source, multi-model. Built from clean-room architecture analysis of the most advanced AI coding tool ever shipped. 19 tools, parallel execution, session persistence — works with Claude, DeepSeek, Nemotron, or any of 200+ models via OpenRouter. No subscription required.
+**A custom AI coding assistant in a 4.7MB binary.** Free, open-source, multi-model. 19 tools, parallel execution, session persistence -- works with Claude, DeepSeek, Nemotron, or any of 200+ models via OpenRouter. No subscription required. Part of the [CCX (Community Code Extended)](https://github.com/anton-abyzov/ccx) project.
 
-> **CCX** = **C**ommunity **C**laude Code e**X**tended — the open-source, multi-model evolution of Claude Code. Built by the community, for the community.
+> **CCX** = **C**ommunity **C**ode E**x**tended -- the open-source, multi-model AI coding assistant. Built by the community, for the community.
 
 ![CCX-RS Terminal UI](assets/screenshot.png)
 
@@ -30,7 +30,7 @@ irm https://raw.githubusercontent.com/anton-abyzov/ccx-rs/main/install.ps1 | iex
 <details>
 <summary>Other install methods</summary>
 
-#### Cargo (from source — all platforms)
+#### Cargo (from source -- all platforms)
 ```bash
 cargo install --git https://github.com/anton-abyzov/ccx-rs ccx-cli
 ```
@@ -66,21 +66,21 @@ ccx chat --provider openrouter --model "deepseek/deepseek-r1"
 
 ### With Claude Max/Pro (auto-detects subscription)
 ```bash
-ccx chat   # reads token from macOS Keychain — no API key needed
+ccx chat   # reads token from macOS Keychain -- no API key needed
 ```
 
 ## Features
 
-- **19 tools** — Bash, FileRead/Write/Edit, Glob, Grep, WebFetch, Agent (spawns sub-agents), TeamCreate, SendMessage, TaskCreate, and more
-- **Claude Code-style TUI** — welcome panel, styled `>` prompt, inline tool display
-- **Multi-model** — Claude (API/subscription), OpenRouter (200+ models), Ollama (local)
-- **Tab autocomplete** — slash commands + 50+ discovered skills
-- **MCP support** — connect external tool servers via `.mcp.json`
-- **Session persistence** — `/resume`, `/continue`, `--resume`, `--continue`
-- **Parallel tool execution** — all tools in a turn run concurrently
-- **Thinking display** — see DeepSeek R1's reasoning in real-time
-- **OAuth login** — `/login` opens browser, no API key copy-paste
-- **Prompt caching** — saves tokens on multi-turn conversations
+- **19 tools** -- Bash, FileRead/Write/Edit, Glob, Grep, WebFetch, Agent (spawns sub-agents), TeamCreate, SendMessage, TaskCreate, and more
+- **Full TUI** -- welcome panel, styled `>` prompt, inline tool display
+- **Multi-model** -- Claude (API/subscription), OpenRouter (200+ models), Ollama (local)
+- **Tab autocomplete** -- slash commands + 50+ discovered skills
+- **MCP support** -- connect external tool servers via `.mcp.json`
+- **Session persistence** -- `/resume`, `/continue`, `--resume`, `--continue`
+- **Parallel tool execution** -- all tools in a turn run concurrently
+- **Thinking display** -- see DeepSeek R1's reasoning in real-time
+- **OAuth login** -- `/login` opens browser, no API key copy-paste
+- **Prompt caching** -- saves tokens on multi-turn conversations
 
 ## Demo
 
