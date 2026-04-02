@@ -1,3 +1,4 @@
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -6,37 +7,42 @@ use serde_json::json;
 
 pub struct GrepTool;
 
+static RG_PATH: OnceLock<String> = OnceLock::new();
+
 /// Find ripgrep binary — check PATH first, then common install locations.
-fn which_rg() -> String {
-    // Use platform-appropriate command to find rg in PATH.
-    #[cfg(windows)]
-    let lookup = std::process::Command::new("where").arg("rg").output();
-    #[cfg(not(windows))]
-    let lookup = std::process::Command::new("which").arg("rg").output();
+/// Result is cached for the lifetime of the process.
+fn which_rg() -> &'static str {
+    RG_PATH.get_or_init(|| {
+        // Use platform-appropriate command to find rg in PATH.
+        #[cfg(windows)]
+        let lookup = std::process::Command::new("where").arg("rg").output();
+        #[cfg(not(windows))]
+        let lookup = std::process::Command::new("which").arg("rg").output();
 
-    if let Ok(output) = lookup
-        && output.status.success()
-    {
-        let path = String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .next()
-            .unwrap_or("")
-            .trim()
-            .to_string();
-        if !path.is_empty() {
-            return path;
+        if let Ok(output) = lookup
+            && output.status.success()
+        {
+            let path = String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .next()
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if !path.is_empty() {
+                return path;
+            }
         }
-    }
 
-    // Common fallback paths (Unix only).
-    #[cfg(not(windows))]
-    for path in &["/opt/homebrew/bin/rg", "/usr/local/bin/rg", "/usr/bin/rg"] {
-        if std::path::Path::new(path).exists() {
-            return path.to_string();
+        // Common fallback paths (Unix only).
+        #[cfg(not(windows))]
+        for path in &["/opt/homebrew/bin/rg", "/usr/local/bin/rg", "/usr/bin/rg"] {
+            if std::path::Path::new(path).exists() {
+                return path.to_string();
+            }
         }
-    }
 
-    "rg".to_string() // last resort
+        "rg".to_string() // last resort
+    })
 }
 
 #[async_trait]
@@ -132,7 +138,7 @@ impl Tool for GrepTool {
 
         // Try system rg first, fall back to common paths
         let rg_path = which_rg();
-        let mut cmd = tokio::process::Command::new(&rg_path);
+        let mut cmd = tokio::process::Command::new(rg_path);
         cmd.arg("--no-heading").arg("--color=never");
 
         // Output mode flags.

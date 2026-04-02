@@ -1,3 +1,4 @@
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -12,6 +13,19 @@ const DEFAULT_MAX_BODY_SIZE: usize = 5 * 1024 * 1024;
 
 /// Maximum redirect hops.
 const MAX_REDIRECTS: usize = 10;
+
+static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+fn shared_client() -> &'static reqwest::Client {
+    HTTP_CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
+            .redirect(reqwest::redirect::Policy::limited(MAX_REDIRECTS))
+            .user_agent("ccx/0.2")
+            .build()
+            .unwrap_or_default()
+    })
+}
 
 pub struct WebFetchTool;
 
@@ -60,13 +74,7 @@ impl Tool for WebFetchTool {
             .as_u64()
             .unwrap_or(DEFAULT_MAX_BODY_SIZE as u64) as usize;
 
-        // Build client with timeout, redirect policy, and user-agent.
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(timeout_secs))
-            .redirect(reqwest::redirect::Policy::limited(MAX_REDIRECTS))
-            .user_agent("ccx/0.1 (Claude Code Rust)")
-            .build()
-            .map_err(|e| ToolError::Execution(format!("HTTP client error: {e}")))?;
+        let client = shared_client();
 
         let response = client.get(url).send().await.map_err(|e| {
             if e.is_timeout() {

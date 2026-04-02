@@ -84,13 +84,34 @@ pub struct McpConfig {
 }
 
 /// Load MCP config from .mcp.json in the given directory.
+/// For project-level configs (not in home directory), prints a warning with server names.
 pub fn load_mcp_config(dir: &std::path::Path) -> Option<McpConfig> {
     let path = dir.join(".mcp.json");
     if path.exists() {
         let content = std::fs::read_to_string(&path).ok()?;
-        serde_json::from_str(&content).ok()
+        let config: McpConfig = serde_json::from_str(&content).ok()?;
+
+        // Determine if this is a project-level config (not global).
+        let is_project_config = !is_global_config_dir(dir);
+        if is_project_config && !config.mcp_servers.is_empty() {
+            let server_names: Vec<&str> = config.mcp_servers.keys().map(|s| s.as_str()).collect();
+            eprintln!("\x1b[33m\u{26a0} Project MCP config found: .mcp.json\x1b[0m");
+            eprintln!("  Servers: {}", server_names.join(", "));
+            eprintln!("  Loading MCP servers from project config (use --no-mcp to skip)");
+        }
+
+        Some(config)
     } else {
         None
+    }
+}
+
+/// Check if a directory is a global config directory (~/.claude or ~/.ccx).
+fn is_global_config_dir(dir: &std::path::Path) -> bool {
+    if let Some(home) = dirs::home_dir() {
+        dir == home.join(".claude") || dir == home.join(".ccx")
+    } else {
+        false
     }
 }
 
@@ -104,7 +125,7 @@ pub async fn register_mcp_tools(
 
     for (name, server) in &config.mcp_servers {
         // Check if the MCP server command exists before attempting to spawn it.
-        let cmd_name = server.command.split('/').last().unwrap_or(&server.command);
+        let cmd_name = server.command.split('/').next_back().unwrap_or(&server.command);
         let cmd_exists = std::process::Command::new("which")
             .arg(&server.command)
             .stdout(std::process::Stdio::null())

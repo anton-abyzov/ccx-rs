@@ -28,13 +28,20 @@ impl CostTracker {
         self.api_calls += 1;
     }
 
-    /// Estimate cost in USD based on Claude pricing.
-    /// Uses approximate Sonnet pricing as default.
+    /// Estimate cost in USD based on model pricing.
+    /// Falls back to Sonnet pricing for unknown models.
     pub fn estimated_cost_usd(&self) -> f64 {
-        let input_cost = self.total_input_tokens as f64 * 3.0 / 1_000_000.0;
-        let output_cost = self.total_output_tokens as f64 * 15.0 / 1_000_000.0;
-        let cache_write_cost = self.total_cache_creation_tokens as f64 * 3.75 / 1_000_000.0;
-        let cache_read_cost = self.total_cache_read_tokens as f64 * 0.30 / 1_000_000.0;
+        self.estimated_cost_for_model("sonnet")
+    }
+
+    /// Estimate cost in USD using model-specific pricing.
+    pub fn estimated_cost_for_model(&self, model: &str) -> f64 {
+        let (input_price, output_price) = price_per_mtok(model);
+        let input_cost = self.total_input_tokens as f64 * input_price / 1_000_000.0;
+        let output_cost = self.total_output_tokens as f64 * output_price / 1_000_000.0;
+        // Cache pricing scales relative to base input price.
+        let cache_write_cost = self.total_cache_creation_tokens as f64 * (input_price * 1.25) / 1_000_000.0;
+        let cache_read_cost = self.total_cache_read_tokens as f64 * (input_price * 0.1) / 1_000_000.0;
         input_cost + output_cost + cache_write_cost + cache_read_cost
     }
 
@@ -49,6 +56,19 @@ impl CostTracker {
             self.api_calls,
             self.estimated_cost_usd()
         )
+    }
+}
+
+/// Per-million-token pricing (input, output) for known model families.
+fn price_per_mtok(model: &str) -> (f64, f64) {
+    match model {
+        m if m.contains("opus") => (15.0, 75.0),
+        m if m.contains("sonnet") => (3.0, 15.0),
+        m if m.contains("haiku") => (0.25, 1.25),
+        m if m.contains("gpt-4o") => (2.5, 10.0),
+        m if m.contains("deepseek") => (0.55, 2.19),
+        m if m.contains(":free") || m.contains("nemotron") => (0.0, 0.0),
+        _ => (3.0, 15.0), // default to sonnet pricing
     }
 }
 

@@ -12,9 +12,7 @@
 /// JSONL: one `InputMessage` per line (full API message format).
 /// Meta: lightweight metadata for listing without loading messages.
 use std::collections::HashSet;
-use std::collections::hash_map::DefaultHasher;
 use std::fs;
-use std::hash::{Hash, Hasher};
 use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -46,11 +44,15 @@ pub fn ccx_home() -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join(".ccx"))
 }
 
-/// Deterministic hash of a project path for directory naming.
+/// Deterministic stable hash of a project path for directory naming.
+/// Uses a simple multiplicative hash that is stable across Rust versions
+/// (unlike DefaultHasher which may change between releases).
 fn project_hash(path: &str) -> String {
-    let mut hasher = DefaultHasher::new();
-    path.hash(&mut hasher);
-    format!("{:016x}", hasher.finish())
+    let mut hash: u64 = 0;
+    for (i, b) in path.bytes().enumerate() {
+        hash = hash.wrapping_mul(31).wrapping_add(b as u64).wrapping_add(i as u64);
+    }
+    format!("{:016x}", hash)
 }
 
 /// Sessions directory for a given provider and project (new layout).
@@ -239,13 +241,11 @@ pub fn list_sessions_for_project(cwd: &str, provider: &str) -> Vec<SessionMeta> 
                 if !path.to_string_lossy().ends_with(".meta.json") {
                     continue;
                 }
-                if let Ok(content) = fs::read_to_string(&path) {
-                    if let Ok(meta) = serde_json::from_str::<SessionMeta>(&content) {
-                        if seen_ids.insert(meta.id.clone()) {
+                if let Ok(content) = fs::read_to_string(&path)
+                    && let Ok(meta) = serde_json::from_str::<SessionMeta>(&content)
+                        && seen_ids.insert(meta.id.clone()) {
                             sessions.push(meta);
                         }
-                    }
-                }
             }
         }
     }
@@ -292,12 +292,14 @@ pub fn cleanup_sessions(cwd: &str, provider: &str, max_sessions: usize) {
 // ---------------------------------------------------------------------------
 
 /// Extract a preview from user text (first line, truncated to 80 chars).
+/// Uses char-based truncation to avoid panicking on multi-byte UTF-8.
 pub fn make_preview(text: &str) -> String {
     let line = text.lines().next().unwrap_or(text);
-    if line.len() > 80 {
-        format!("{}...", &line[..77])
+    let truncated: String = line.chars().take(77).collect();
+    if truncated.len() < line.len() {
+        format!("{truncated}...")
     } else {
-        line.to_string()
+        truncated
     }
 }
 

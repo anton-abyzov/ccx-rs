@@ -435,10 +435,10 @@ fn run_mcp(action: &str, name: Option<&str>, command: Option<&str>, args: &[Stri
             let mut found = false;
 
             // Project-level .mcp.json
-            if mcp_path.exists() {
-                if let Ok(content) = std::fs::read_to_string(&mcp_path) {
-                    if let Ok(config) = serde_json::from_str::<serde_json::Value>(&content) {
-                        if let Some(servers) = config["mcpServers"].as_object() {
+            if mcp_path.exists()
+                && let Ok(content) = std::fs::read_to_string(&mcp_path)
+                    && let Ok(config) = serde_json::from_str::<serde_json::Value>(&content)
+                        && let Some(servers) = config["mcpServers"].as_object() {
                             for (name, server) in servers {
                                 let cmd = server["command"].as_str().unwrap_or("unknown");
                                 let srv_args = server["args"]
@@ -456,17 +456,14 @@ fn run_mcp(action: &str, name: Option<&str>, command: Option<&str>, args: &[Stri
                                 found = true;
                             }
                         }
-                    }
-                }
-            }
 
             // Global MCP config
             let global_mcp = dirs::home_dir().unwrap().join(".claude/mcp.json");
-            if global_mcp.exists() {
-                if let Ok(content) = std::fs::read_to_string(&global_mcp) {
-                    if let Ok(config) = serde_json::from_str::<serde_json::Value>(&content) {
-                        if let Some(servers) = config["mcpServers"].as_object() {
-                            if !servers.is_empty() {
+            if global_mcp.exists()
+                && let Ok(content) = std::fs::read_to_string(&global_mcp)
+                    && let Ok(config) = serde_json::from_str::<serde_json::Value>(&content)
+                        && let Some(servers) = config["mcpServers"].as_object()
+                            && !servers.is_empty() {
                                 println!("\n  {DIM}Global (~/.claude/mcp.json):{RESET}");
                                 for (name, server) in servers {
                                     let cmd = server["command"].as_str().unwrap_or("unknown");
@@ -476,10 +473,6 @@ fn run_mcp(action: &str, name: Option<&str>, command: Option<&str>, args: &[Stri
                                     found = true;
                                 }
                             }
-                        }
-                    }
-                }
-            }
 
             if !found {
                 println!("  {DIM}No MCP servers configured{RESET}");
@@ -660,24 +653,32 @@ fn run_update() {
 
                             println!("Installing to {install_path}...");
 
-                            let mv = std::process::Command::new("mv")
-                                .args([tmp, &install_path])
-                                .status();
+                            // Check if we can write to the target directory
+                            let needs_sudo = install_path.starts_with("/usr/")
+                                || install_path.starts_with("/opt/")
+                                || install_path.starts_with("/System/");
 
-                            if mv.map(|s| s.success()).unwrap_or(false) {
+                            let success = if needs_sudo {
+                                println!("Requires sudo for {install_path}...");
+                                std::process::Command::new("sudo")
+                                    .args(["mv", tmp, &install_path])
+                                    .status()
+                                    .map(|s| s.success())
+                                    .unwrap_or(false)
+                            } else {
+                                std::process::Command::new("mv")
+                                    .args([tmp, &install_path])
+                                    .status()
+                                    .map(|s| s.success())
+                                    .unwrap_or(false)
+                            };
+
+                            if success {
                                 println!("\n\x1b[32m✓ Updated to v{latest}!\x1b[0m");
                             } else {
-                                println!("Requires elevated permissions...");
-                                let sudo_mv = std::process::Command::new("sudo")
-                                    .args(["mv", tmp, &install_path])
-                                    .status();
-                                if sudo_mv.map(|s| s.success()).unwrap_or(false) {
-                                    println!("\n\x1b[32m✓ Updated to v{latest}!\x1b[0m");
-                                } else {
-                                    eprintln!(
-                                        "Failed to install. Try manually: sudo mv {tmp} {install_path}"
-                                    );
-                                }
+                                eprintln!(
+                                    "Failed to install. Try manually: sudo mv {tmp} {install_path}"
+                                );
                             }
                         }
                         _ => {
@@ -1721,15 +1722,6 @@ impl ccx_core::AgentCallback for InlineCallback {
 }
 
 /// Map short model name to full model ID.
-fn resolve_model_name(name: &str) -> &str {
-    match name.trim().to_lowercase().as_str() {
-        "sonnet" => "claude-sonnet-4-6",
-        "opus" => "claude-opus-4-6",
-        "haiku" => "claude-haiku-4-5",
-        _ => name.trim(),
-    }
-}
-
 /// Run inline interactive mode (default — no full-screen).
 #[allow(clippy::too_many_arguments)]
 async fn run_inline_mode(
@@ -1792,8 +1784,8 @@ async fn run_inline_mode(
 
     // Handle --continue flag.
     if continue_session {
-        match sessions::find_latest_for_cwd(&cwd_str, &effective_provider) {
-            Some(meta) => match sessions::load_session_messages(&cwd_str, &effective_provider, &meta.id) {
+        match sessions::find_latest_for_cwd(&cwd_str, effective_provider) {
+            Some(meta) => match sessions::load_session_messages(&cwd_str, effective_provider, &meta.id) {
                 Ok(messages) if !messages.is_empty() => {
                     let count = messages.len();
                     agent.set_messages(messages);
@@ -1814,7 +1806,7 @@ async fn run_inline_mode(
     } else if let Some(id) = resume_id {
         if id.is_empty() {
             // --resume without ID: list sessions.
-            let all = sessions::list_sessions_for_project(&cwd_str, &effective_provider);
+            let all = sessions::list_sessions_for_project(&cwd_str, effective_provider);
             if all.is_empty() {
                 println!("\x1b[90mNo saved sessions for this directory.\x1b[0m");
             } else {
@@ -1835,10 +1827,10 @@ async fn run_inline_mode(
             }
         } else {
             // --resume <id>: load specific session.
-            match sessions::load_session_messages(&cwd_str, &effective_provider, id) {
+            match sessions::load_session_messages(&cwd_str, effective_provider, id) {
                 Ok(messages) if !messages.is_empty() => {
                     let count = messages.len();
-                    let meta = sessions::find_session_meta(&cwd_str, &effective_provider, id);
+                    let meta = sessions::find_session_meta(&cwd_str, effective_provider, id);
                     session_turns = meta.as_ref().map(|m| m.turns).unwrap_or(0);
                     first_preview = meta.as_ref().map(|m| m.preview.clone()).unwrap_or_default();
                     agent.set_messages(messages);
@@ -1892,9 +1884,9 @@ async fn run_inline_mode(
                         }
                         "/model" => {
                             if let Some(new_model) = cmd_args {
-                                let resolved = resolve_model_name(new_model);
-                                agent.set_model(resolved);
-                                current_model = resolved.to_string();
+                                let (resolved, _) = resolve_model_alias(new_model, effective_provider);
+                                agent.set_model(&resolved);
+                                current_model = resolved.clone();
                                 println!("\x1b[32mModel changed to {}\x1b[0m", resolved);
                             } else {
                                 println!("Model: {current_model}");
@@ -1973,8 +1965,8 @@ async fn run_inline_mode(
                                     );
                                     if no_auth {
                                         // Re-check auth after login.
-                                        if let Ok(auth) = ccx_auth::resolve_auth(None) {
-                                            if !auth.is_none() {
+                                        if let Ok(auth) = ccx_auth::resolve_auth(None)
+                                            && !auth.is_none() {
                                                 no_auth = false;
                                                 let new_client = ccx_api::ApiClient::Claude(
                                                     ccx_api::ClaudeClient::with_auth(
@@ -1988,7 +1980,6 @@ async fn run_inline_mode(
                                                     auth.display_label()
                                                 );
                                             }
-                                        }
                                     }
                                 }
                                 Err(e) => println!("\x1b[31mLogin failed: {e}\x1b[0m"),
@@ -2002,10 +1993,10 @@ async fn run_inline_mode(
                         }
                         "/resume" => {
                             if let Some(sid) = cmd_args {
-                                match sessions::load_session_messages(&cwd_str, &effective_provider, sid) {
+                                match sessions::load_session_messages(&cwd_str, effective_provider, sid) {
                                     Ok(messages) if !messages.is_empty() => {
                                         let count = messages.len();
-                                        let meta = sessions::find_session_meta(&cwd_str, &effective_provider, sid);
+                                        let meta = sessions::find_session_meta(&cwd_str, effective_provider, sid);
                                         let turns = meta.as_ref().map(|m| m.turns).unwrap_or(0);
                                         first_preview = meta
                                             .as_ref()
@@ -2025,7 +2016,7 @@ async fn run_inline_mode(
                                     Err(e) => println!("\x1b[31m{e}\x1b[0m"),
                                 }
                             } else {
-                                let all = sessions::list_sessions_for_project(&cwd_str, &effective_provider);
+                                let all = sessions::list_sessions_for_project(&cwd_str, effective_provider);
                                 if all.is_empty() {
                                     println!("\x1b[90mNo saved sessions.\x1b[0m");
                                 } else {
@@ -2046,9 +2037,9 @@ async fn run_inline_mode(
                             true
                         }
                         "/continue" => {
-                            match sessions::find_latest_for_cwd(&cwd_str, &effective_provider) {
+                            match sessions::find_latest_for_cwd(&cwd_str, effective_provider) {
                                 Some(meta) => {
-                                    match sessions::load_session_messages(&cwd_str, &effective_provider, &meta.id) {
+                                    match sessions::load_session_messages(&cwd_str, effective_provider, &meta.id) {
                                         Ok(messages) if !messages.is_empty() => {
                                             let count = messages.len();
                                             agent.set_messages(messages);
@@ -2163,7 +2154,7 @@ async fn run_inline_mode(
                             true
                         }
                         "/sessions" => {
-                            let all = sessions::list_sessions_for_project(&cwd_str, &effective_provider);
+                            let all = sessions::list_sessions_for_project(&cwd_str, effective_provider);
                             if all.is_empty() {
                                 println!("\x1b[90mNo saved sessions for this directory.\x1b[0m");
                             } else {
@@ -2515,7 +2506,7 @@ async fn run_inline_mode(
                 session_turns += 1;
 
                 // Incremental session save after each turn.
-                let _ = sessions::save_session_messages(&cwd_str, &effective_provider, &session_id, agent.messages());
+                let _ = sessions::save_session_messages(&cwd_str, effective_provider, &session_id, agent.messages());
                 let _ = sessions::save_session_meta(&sessions::SessionMeta {
                     id: session_id.clone(),
                     cwd: cwd_str.clone(),
@@ -2527,7 +2518,7 @@ async fn run_inline_mode(
                     turns: session_turns,
                     total_tokens: agent.cost().total_input_tokens
                         + agent.cost().total_output_tokens,
-                }, &effective_provider);
+                }, effective_provider);
 
                 ccx_tui::inline::render_separator();
             }
@@ -2541,7 +2532,7 @@ async fn run_inline_mode(
 
     // Final session save and cleanup.
     if session_turns > 0 {
-        let _ = sessions::save_session_messages(&cwd_str, &effective_provider, &session_id, agent.messages());
+        let _ = sessions::save_session_messages(&cwd_str, effective_provider, &session_id, agent.messages());
         let _ = sessions::save_session_meta(&sessions::SessionMeta {
             id: session_id.clone(),
             cwd: cwd_str.clone(),
@@ -2556,8 +2547,8 @@ async fn run_inline_mode(
             name: None,
             turns: session_turns,
             total_tokens: agent.cost().total_input_tokens + agent.cost().total_output_tokens,
-        }, &effective_provider);
-        sessions::cleanup_sessions(&cwd_str, &effective_provider, 100);
+        }, effective_provider);
+        sessions::cleanup_sessions(&cwd_str, effective_provider, 100);
     }
 
     // Save history for next session.

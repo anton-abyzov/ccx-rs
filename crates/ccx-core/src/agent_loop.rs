@@ -692,7 +692,11 @@ impl AgentLoop {
                                 Delta::SignatureDelta { signature },
                             ) => {
                                 trace!("Signature delta received");
-                                *sig = Some(signature);
+                                if let Some(ref mut existing) = *sig {
+                                    existing.push_str(&signature);
+                                } else {
+                                    *sig = Some(signature);
+                                }
                             }
                             _ => {}
                         }
