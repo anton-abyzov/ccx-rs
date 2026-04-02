@@ -177,6 +177,25 @@ enum Commands {
     Info,
     /// Update ccx to the latest version
     Update,
+    /// Manage authentication
+    Auth {
+        /// Auth action: status, login, logout
+        #[arg(default_value = "status")]
+        action: String,
+    },
+    /// Configure and manage MCP servers
+    Mcp {
+        /// MCP action: list, add, remove
+        #[arg(default_value = "list")]
+        action: String,
+        /// Server name (for add/remove)
+        name: Option<String>,
+        /// Command to run (for add)
+        command: Option<String>,
+        /// Arguments (for add)
+        #[arg(trailing_var_arg = true)]
+        args: Vec<String>,
+    },
 }
 
 #[tokio::main]
@@ -303,6 +322,272 @@ async fn main() {
         Commands::Update => {
             run_update();
         }
+        Commands::Auth { action } => {
+            run_auth(&action).await;
+        }
+        Commands::Mcp {
+            action,
+            name,
+            command,
+            args,
+        } => {
+            run_mcp(&action, name.as_deref(), command.as_deref(), &args);
+        }
+    }
+}
+
+async fn run_auth(action: &str) {
+    const GREEN: &str = "\x1b[32m";
+    const BOLD: &str = "\x1b[1m";
+    const DIM: &str = "\x1b[90m";
+    const RESET: &str = "\x1b[0m";
+
+    match action {
+        "status" | "" => {
+            println!("\n{BOLD}Authentication Status:{RESET}\n");
+
+            // 1. OAuth (keychain / credentials file)
+            match ccx_auth::resolve_auth(None) {
+                Ok(ccx_auth::AuthMethod::OAuthToken {
+                    subscription_type, ..
+                }) => {
+                    let label = match subscription_type.as_str() {
+                        "max" => "Claude Max",
+                        "pro" => "Claude Pro",
+                        "team" => "Claude Team",
+                        _ => "Claude Subscription",
+                    };
+                    println!("  {GREEN}●{RESET} {BOLD}{label}{RESET} (OAuth)");
+                }
+                Ok(ccx_auth::AuthMethod::ApiKey(ref k)) => {
+                    let src = match &k.source {
+                        ccx_auth::KeySource::EnvVar => "ANTHROPIC_API_KEY",
+                        ccx_auth::KeySource::ConfigFile(_) => "~/.claude/config.json",
+                        ccx_auth::KeySource::Explicit => "explicit",
+                    };
+                    let masked = mask_key(&k.key);
+                    println!("  {GREEN}●{RESET} {BOLD}Anthropic API Key{RESET} ({src})");
+                    println!("    {DIM}{masked}{RESET}");
+                }
+                _ => {
+                    println!("  {DIM}○{RESET} Anthropic — not authenticated");
+                    println!("    {DIM}Run: ccx auth login{RESET}");
+                }
+            }
+
+            // 2. Other provider keys from env
+            for (var, label) in [
+                ("OPENROUTER_API_KEY", "OpenRouter"),
+                ("OPENAI_API_KEY", "OpenAI"),
+            ] {
+                if let Ok(key) = std::env::var(var) {
+                    let masked = mask_key(&key);
+                    println!("  {GREEN}●{RESET} {BOLD}{label}{RESET} ({var})");
+                    println!("    {DIM}{masked}{RESET}");
+                }
+            }
+
+            println!();
+        }
+        "login" => {
+            match ccx_auth::oauth::login().await {
+                Ok(_) => println!("\x1b[32m✓ Login successful!\x1b[0m"),
+                Err(e) => eprintln!("\x1b[31mLogin failed: {e}\x1b[0m"),
+            }
+        }
+        "logout" => {
+            println!("Clearing credentials...");
+            #[cfg(target_os = "macos")]
+            {
+                let user = std::env::var("USER").unwrap_or_default();
+                std::process::Command::new("security")
+                    .args([
+                        "delete-generic-password",
+                        "-a",
+                        &user,
+                        "-s",
+                        "Claude Code-credentials",
+                    ])
+                    .output()
+                    .ok();
+            }
+            let creds = dirs::home_dir().unwrap().join(".claude/.credentials.json");
+            std::fs::remove_file(&creds).ok();
+            println!("\x1b[32m✓ Logged out\x1b[0m");
+        }
+        _ => {
+            println!("Usage: ccx auth [status|login|logout]");
+        }
+    }
+}
+
+fn run_mcp(action: &str, name: Option<&str>, command: Option<&str>, args: &[String]) {
+    const GREEN: &str = "\x1b[32m";
+    const BOLD: &str = "\x1b[1m";
+    const DIM: &str = "\x1b[90m";
+    const RESET: &str = "\x1b[0m";
+
+    let mcp_path = std::path::PathBuf::from(".mcp.json");
+
+    match action {
+        "list" | "" => {
+            println!("\n{BOLD}MCP Servers:{RESET}\n");
+            let mut found = false;
+
+            // Project-level .mcp.json
+            if mcp_path.exists() {
+                if let Ok(content) = std::fs::read_to_string(&mcp_path) {
+                    if let Ok(config) = serde_json::from_str::<serde_json::Value>(&content) {
+                        if let Some(servers) = config["mcpServers"].as_object() {
+                            for (name, server) in servers {
+                                let cmd = server["command"].as_str().unwrap_or("unknown");
+                                let srv_args = server["args"]
+                                    .as_array()
+                                    .map(|a| {
+                                        a.iter()
+                                            .filter_map(|v| v.as_str())
+                                            .collect::<Vec<_>>()
+                                            .join(" ")
+                                    })
+                                    .unwrap_or_default();
+                                println!(
+                                    "  {GREEN}●{RESET} {BOLD}{name}{RESET} — {DIM}{cmd} {srv_args}{RESET}"
+                                );
+                                found = true;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Global MCP config
+            let global_mcp = dirs::home_dir().unwrap().join(".claude/mcp.json");
+            if global_mcp.exists() {
+                if let Ok(content) = std::fs::read_to_string(&global_mcp) {
+                    if let Ok(config) = serde_json::from_str::<serde_json::Value>(&content) {
+                        if let Some(servers) = config["mcpServers"].as_object() {
+                            if !servers.is_empty() {
+                                println!("\n  {DIM}Global (~/.claude/mcp.json):{RESET}");
+                                for (name, server) in servers {
+                                    let cmd = server["command"].as_str().unwrap_or("unknown");
+                                    println!(
+                                        "  {GREEN}●{RESET} {BOLD}{name}{RESET} — {DIM}{cmd}{RESET}"
+                                    );
+                                    found = true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if !found {
+                println!("  {DIM}No MCP servers configured{RESET}");
+            }
+
+            println!("\n  {DIM}Add: ccx mcp add <name> <command> [args...]{RESET}");
+            println!("  {DIM}Remove: ccx mcp remove <name>{RESET}");
+            println!();
+        }
+        "add" => {
+            let name = match name {
+                Some(n) => n,
+                None => {
+                    eprintln!("Usage: ccx mcp add <name> <command> [args...]");
+                    return;
+                }
+            };
+            let cmd = match command {
+                Some(c) => c,
+                None => {
+                    eprintln!("Usage: ccx mcp add <name> <command> [args...]");
+                    return;
+                }
+            };
+
+            // Read or create .mcp.json
+            let mut config: serde_json::Value = if mcp_path.exists() {
+                let content = std::fs::read_to_string(&mcp_path).unwrap_or_default();
+                serde_json::from_str(&content).unwrap_or_else(|_| {
+                    serde_json::json!({"mcpServers": {}})
+                })
+            } else {
+                serde_json::json!({"mcpServers": {}})
+            };
+
+            let servers = config["mcpServers"]
+                .as_object_mut()
+                .expect("mcpServers must be an object");
+
+            let server_entry = if args.is_empty() {
+                serde_json::json!({"command": cmd})
+            } else {
+                serde_json::json!({"command": cmd, "args": args})
+            };
+
+            servers.insert(name.to_string(), server_entry);
+
+            match std::fs::write(&mcp_path, serde_json::to_string_pretty(&config).unwrap()) {
+                Ok(_) => println!("\x1b[32m✓ Added MCP server '{name}'\x1b[0m"),
+                Err(e) => eprintln!("\x1b[31mFailed to write .mcp.json: {e}\x1b[0m"),
+            }
+        }
+        "remove" => {
+            let name = match name {
+                Some(n) => n,
+                None => {
+                    eprintln!("Usage: ccx mcp remove <name>");
+                    return;
+                }
+            };
+
+            if !mcp_path.exists() {
+                eprintln!("No .mcp.json found");
+                return;
+            }
+
+            let content = std::fs::read_to_string(&mcp_path).unwrap_or_default();
+            let mut config: serde_json::Value = match serde_json::from_str(&content) {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("Invalid .mcp.json: {e}");
+                    return;
+                }
+            };
+
+            if let Some(servers) = config["mcpServers"].as_object_mut() {
+                if servers.remove(name).is_some() {
+                    match std::fs::write(
+                        &mcp_path,
+                        serde_json::to_string_pretty(&config).unwrap(),
+                    ) {
+                        Ok(_) => println!("\x1b[32m✓ Removed MCP server '{name}'\x1b[0m"),
+                        Err(e) => eprintln!("\x1b[31mFailed to write .mcp.json: {e}\x1b[0m"),
+                    }
+                } else {
+                    eprintln!("Server '{name}' not found in .mcp.json");
+                }
+            }
+        }
+        _ => {
+            println!("Usage: ccx mcp [list|add|remove]");
+        }
+    }
+}
+
+fn mask_key(key: &str) -> String {
+    if key.len() <= 8 {
+        return "****".to_string();
+    }
+    let suffix = &key[key.len() - 4..];
+    if key.starts_with("sk-ant-") {
+        format!("sk-ant-...{suffix}")
+    } else if key.starts_with("sk-or-") {
+        format!("sk-or-...{suffix}")
+    } else if key.starts_with("sk-") {
+        format!("sk-...{suffix}")
+    } else {
+        format!("...{suffix}")
     }
 }
 
@@ -2106,6 +2391,45 @@ async fn run_inline_mode(
                                 "  {P_DIM}Skills discovered: {}{P_RESET}",
                                 skill_display.len()
                             );
+                            println!();
+                            true
+                        }
+                        "/mcp" => {
+                            println!("\n\x1b[1mMCP Servers:\x1b[0m\n");
+                            if let Some(ref cfg) = mcp_config {
+                                for (name, server) in &cfg.mcp_servers {
+                                    let args_str = server.args.join(" ");
+                                    println!(
+                                        "  \x1b[32m●\x1b[0m \x1b[1m{name}\x1b[0m — \x1b[90m{} {args_str}\x1b[0m",
+                                        server.command
+                                    );
+                                }
+                            } else {
+                                println!("  \x1b[90mNo .mcp.json found in current directory\x1b[0m");
+                            }
+                            let global_mcp = dirs::home_dir().unwrap().join(".claude/mcp.json");
+                            if global_mcp.exists() {
+                                println!("\n  \x1b[90mGlobal: ~/.claude/mcp.json\x1b[0m");
+                            }
+                            println!("\n  \x1b[90mManage: ccx mcp [list|add|remove]\x1b[0m");
+                            println!();
+                            true
+                        }
+                        "/auth" => {
+                            println!("\n\x1b[1mAuthentication Status:\x1b[0m\n");
+                            println!("  Current: \x1b[32m{auth_source}\x1b[0m");
+                            if let Some(ref e) = email {
+                                println!("  Account: {e}");
+                            }
+                            for (var, label) in [
+                                ("OPENROUTER_API_KEY", "OpenRouter"),
+                                ("OPENAI_API_KEY", "OpenAI"),
+                            ] {
+                                if let Ok(key) = std::env::var(var) {
+                                    println!("  \x1b[32m●\x1b[0m \x1b[1m{label}\x1b[0m ({var}): \x1b[90m{}\x1b[0m", mask_key(&key));
+                                }
+                            }
+                            println!("\n  \x1b[90mManage: ccx auth [status|login|logout]\x1b[0m");
                             println!();
                             true
                         }

@@ -83,6 +83,14 @@ pub const COMMANDS: &[SlashCommand] = &[
         name: "/plugins",
         description: "List installed plugins and skills",
     },
+    SlashCommand {
+        name: "/mcp",
+        description: "Show MCP server status",
+    },
+    SlashCommand {
+        name: "/auth",
+        description: "Show authentication status",
+    },
 ];
 
 /// Find commands matching a prefix (e.g., "/he" matches "/help").
