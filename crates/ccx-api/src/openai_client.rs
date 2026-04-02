@@ -346,9 +346,18 @@ fn convert_messages(messages: &[InputMessage], system: Option<&str>) -> Vec<Open
                                     },
                                 });
                             }
-                            // Strip Anthropic thinking blocks — OpenAI doesn't
-                            // understand them and they'd cause parse errors.
-                            ContentBlock::Thinking { .. } => {}
+                            // Convert Anthropic thinking blocks to text so the
+                            // model retains its reasoning history. OpenAI doesn't
+                            // support thinking blocks natively, but the content
+                            // is valuable context for multi-turn conversations.
+                            ContentBlock::Thinking { thinking, .. } => {
+                                if !thinking.is_empty() {
+                                    if !text_content.is_empty() {
+                                        text_content.push_str("\n\n");
+                                    }
+                                    text_content.push_str(&format!("[Reasoning]: {thinking}"));
+                                }
+                            }
                             _ => {}
                         }
                     }
