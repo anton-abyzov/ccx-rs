@@ -658,33 +658,67 @@ fn run_update() {
                             let current_exe = std::env::current_exe().unwrap_or_default();
                             let install_path = current_exe.to_string_lossy().to_string();
 
-                            println!("Installing to {install_path}...");
-
-                            // Check if we can write to the target directory
-                            let needs_sudo = install_path.starts_with("/usr/")
+                            // Try to install in-place first (works if binary is in user-writable dir)
+                            // If binary is in /usr/local/bin (needs sudo), try user dir first
+                            let (final_path, success) = if install_path.starts_with("/usr/")
                                 || install_path.starts_with("/opt/")
-                                || install_path.starts_with("/System/");
+                                || install_path.starts_with("/System/")
+                            {
+                                // System path — try user dir first to avoid sudo
+                                let user_dir = dirs::home_dir()
+                                    .map(|h| h.join(".ccx/bin"))
+                                    .unwrap_or_else(|| std::path::PathBuf::from("/usr/local/bin"));
+                                let user_path = user_dir.join("ccx");
 
-                            let success = if needs_sudo {
-                                println!("Requires sudo for {install_path}...");
-                                std::process::Command::new("sudo")
-                                    .args(["mv", tmp, &install_path])
+                                // Create user bin dir
+                                std::fs::create_dir_all(&user_dir).ok();
+
+                                let mv_ok = std::process::Command::new("mv")
+                                    .args([tmp, &user_path.to_string_lossy()])
                                     .status()
                                     .map(|s| s.success())
-                                    .unwrap_or(false)
+                                    .unwrap_or(false);
+
+                                if mv_ok {
+                                    // Check if user_dir is in PATH
+                                    let path_env = std::env::var("PATH").unwrap_or_default();
+                                    if !path_env.contains(&user_dir.to_string_lossy().to_string()) {
+                                        println!(
+                                            "\n\x1b[38;2;138;99;210mAdd to your shell profile:\x1b[0m"
+                                        );
+                                        println!(
+                                            "  export PATH=\"{}:$PATH\"",
+                                            user_dir.display()
+                                        );
+                                    }
+                                    (user_path.to_string_lossy().to_string(), true)
+                                } else {
+                                    // Fallback to sudo for original location
+                                    println!("Installing to {install_path} (requires sudo)...");
+                                    let sudo_ok = std::process::Command::new("sudo")
+                                        .args(["mv", tmp, &install_path])
+                                        .status()
+                                        .map(|s| s.success())
+                                        .unwrap_or(false);
+                                    (install_path.clone(), sudo_ok)
+                                }
                             } else {
-                                std::process::Command::new("mv")
+                                // User-writable path — direct mv
+                                println!("Installing to {install_path}...");
+                                let ok = std::process::Command::new("mv")
                                     .args([tmp, &install_path])
                                     .status()
                                     .map(|s| s.success())
-                                    .unwrap_or(false)
+                                    .unwrap_or(false);
+                                (install_path.clone(), ok)
                             };
 
                             if success {
                                 println!("\n\x1b[32m✓ Updated to v{latest}!\x1b[0m");
+                                println!("  Installed at: {final_path}");
                             } else {
                                 eprintln!(
-                                    "Failed to install. Try manually: sudo mv {tmp} {install_path}"
+                                    "Failed to install. Try: sudo mv {tmp} {install_path}"
                                 );
                             }
                         }

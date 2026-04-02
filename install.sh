@@ -4,7 +4,7 @@ set -e
 # CCX Installer — downloads the latest release binary for your platform
 
 REPO="anton-abyzov/ccx-rs"
-INSTALL_DIR="${CCX_INSTALL_DIR:-/usr/local/bin}"
+INSTALL_DIR="${CCX_INSTALL_DIR:-$HOME/.ccx/bin}"
 
 # Detect OS and architecture
 OS="$(uname -s)"
@@ -48,23 +48,35 @@ else
   exit 1
 fi
 
-# Install
+# Install — no sudo needed (installs to ~/.ccx/bin/)
 chmod +x "$TMP"
+mkdir -p "$INSTALL_DIR"
+mv "$TMP" "$INSTALL_DIR/ccx"
 
-if [ -w "$INSTALL_DIR" ]; then
-  mv "$TMP" "$INSTALL_DIR/ccx"
-else
-  echo "Installing to $INSTALL_DIR (requires sudo)..."
-  sudo mv "$TMP" "$INSTALL_DIR/ccx"
+# Add to PATH if not already there
+if ! echo "$PATH" | grep -q "$INSTALL_DIR"; then
+  echo ""
+  echo "Add CCX to your PATH (add to ~/.zshrc or ~/.bashrc):"
+  echo ""
+  echo "  export PATH=\"$INSTALL_DIR:\$PATH\""
+  echo ""
+  # Try to add automatically
+  for rc in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.profile"; do
+    if [ -f "$rc" ] && ! grep -q "$INSTALL_DIR" "$rc"; then
+      echo "export PATH=\"$INSTALL_DIR:\$PATH\"" >> "$rc"
+      echo "Added to $rc"
+      break
+    fi
+  done
 fi
 
 echo ""
-echo "CCX installed to $INSTALL_DIR/ccx"
+echo "✓ CCX installed to $INSTALL_DIR/ccx"
 echo ""
 echo "Get started:"
 echo "  # Free (OpenRouter — no subscription needed):"
 echo "  export OPENROUTER_API_KEY=\"your-key-from-openrouter.ai/keys\""
-echo "  ccx chat --provider openrouter --model \"nvidia/nemotron-3-super-120b-a12b:free\""
+echo "  ccx --model nemotron"
 echo ""
 echo "  # Claude Max/Pro (auto-detected):"
-echo "  ccx chat"
+echo "  ccx"
