@@ -1,5 +1,5 @@
 use std::io::{BufRead, BufReader, Write};
-use std::net::TcpListener;
+// TcpListener removed — using paste-code flow instead of local callback server
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -26,17 +26,16 @@ pub async fn login() -> Result<OAuthTokens, Box<dyn std::error::Error>> {
     let code_challenge = generate_code_challenge(&code_verifier);
     let state = generate_state();
 
-    // 2. Start local HTTP server on a random port.
-    let listener = TcpListener::bind("127.0.0.1:0")?;
-    let port = listener.local_addr()?.port();
-    let redirect_uri = format!("http://localhost:{}/callback", port);
+    // 2. Use the platform callback URL (registered redirect URI).
+    // Claude's OAuth server only accepts this, NOT localhost.
+    let manual_redirect = "https://platform.claude.com/oauth/code/callback";
 
-    // 3. Build authorize URL (matches Claude Code's exact format).
+    // 3. Build authorize URL matching Claude Code's EXACT format.
     let auth_url = format!(
-        "{}?code=true&response_type=code&client_id={}&redirect_uri={}&scope={}&code_challenge={}&code_challenge_method=S256&state={}",
+        "{}?code=true&client_id={}&response_type=code&redirect_uri={}&scope={}&code_challenge={}&code_challenge_method=S256&state={}",
         AUTH_URL,
         CLIENT_ID,
-        urlencoding::encode(&redirect_uri),
+        urlencoding::encode(manual_redirect),
         urlencoding::encode(SCOPES),
         code_challenge,
         state,
@@ -44,26 +43,38 @@ pub async fn login() -> Result<OAuthTokens, Box<dyn std::error::Error>> {
 
     // 4. Open browser.
     println!("Opening browser for authentication...");
-    println!("If browser doesn't open, visit:\n  {}", auth_url);
     if let Err(e) = open::that(&auth_url) {
         eprintln!("Failed to open browser: {e}");
     }
 
-    // 5. Wait for the callback (single connection).
-    let (mut stream, _) = listener.accept()?;
-    let code = extract_code_from_request(&mut stream, &state)?;
+    // 5. Show paste code prompt (the platform page shows a code after auth).
+    println!();
+    println!("After signing in, you'll see a code on the page.");
+    println!("Paste the code here:");
+    print!("> ");
+    std::io::Write::flush(&mut std::io::stdout())?;
 
-    // Send success response to browser.
-    let response = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n\
-        <html><body style=\"font-family:system-ui;text-align:center;padding:60px\">\
-        <h1>Authentication successful!</h1>\
-        <p>You can close this tab and return to the terminal.</p>\
-        </body></html>";
-    stream.write_all(response.as_bytes())?;
-    stream.flush()?;
-    drop(stream);
+    let mut code_input = String::new();
+    std::io::BufRead::read_line(&mut std::io::BufReader::new(std::io::stdin()), &mut code_input)?;
+    let code_input = code_input.trim();
 
-    // 6. Exchange code for token (JSON body, matching Claude Code's format).
+    // The pasted code format is: {authorization_code}#{state}
+    let (code, received_state) = if let Some((c, s)) = code_input.split_once('#') {
+        (c.to_string(), s.to_string())
+    } else {
+        // Just the code without state — use as-is
+        (code_input.to_string(), state.clone())
+    };
+
+    if received_state != state && code_input.contains('#') {
+        return Err("OAuth state mismatch — possible CSRF. Try /login again.".into());
+    }
+
+    let redirect_uri = manual_redirect.to_string();
+
+    // 6. Exchange code for token.
+
+    // Exchange code for token (JSON body, matching Claude Code's format).
     let client = reqwest::Client::new();
     let token_response = client
         .post(TOKEN_URL)
