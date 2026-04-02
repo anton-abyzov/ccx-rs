@@ -627,7 +627,17 @@ fn shell_profile_target() -> Option<(std::path::PathBuf, bool)> {
     } else if shell.contains("zsh") {
         Some((home.join(".zshrc"), false))
     } else if shell.contains("bash") {
-        Some((home.join(".bashrc"), false))
+        for candidate in [
+            home.join(".bash_profile"),
+            home.join(".bash_login"),
+            home.join(".profile"),
+            home.join(".bashrc"),
+        ] {
+            if candidate.exists() {
+                return Some((candidate, false));
+            }
+        }
+        Some((home.join(".bash_profile"), false))
     } else {
         Some((home.join(".profile"), false))
     }

@@ -48,7 +48,13 @@ shell_profile_path() {
       printf '%s\n' "$HOME/.zshrc"
       ;;
     */bash)
-      printf '%s\n' "$HOME/.bashrc"
+      for candidate in "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile" "$HOME/.bashrc"; do
+        if [ -f "$candidate" ]; then
+          printf '%s\n' "$candidate"
+          return
+        fi
+      done
+      printf '%s\n' "$HOME/.bash_profile"
       ;;
     *)
       printf '%s\n' "$HOME/.profile"

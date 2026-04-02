@@ -18,13 +18,13 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.3.8"
+version = "0.3.9"
 edition = "2024"
 license = "MIT"
 
 [workspace.dependencies]
 tokio = { version = "1", features = ["full"] }
-reqwest = { version = "0.12", features = ["stream", "json"] }
+reqwest = { version = "0.12", default-features = false, features = ["stream", "json", "rustls-tls-native-roots"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
