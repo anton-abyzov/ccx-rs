@@ -140,6 +140,10 @@ impl AgentLoop {
         self.client.set_model(model);
     }
 
+    pub fn set_client(&mut self, client: ApiClient) {
+        self.client = client;
+    }
+
     pub fn set_system_prompt(&mut self, prompt: String) {
         self.system_prompt = prompt;
     }

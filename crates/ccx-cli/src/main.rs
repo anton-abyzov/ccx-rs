@@ -297,6 +297,31 @@ fn effort_config(effort: &str) -> (u32, bool, u32) {
     }
 }
 
+/// Print a friendly authentication guide when no credentials are found.
+fn print_auth_guide(print_mode: bool) {
+    println!();
+    println!("\x1b[1mNo authentication found.\x1b[0m");
+    println!();
+    println!("Choose how to authenticate:");
+    println!();
+    println!("  \x1b[38;2;138;99;210m1.\x1b[0m \x1b[1m/login\x1b[0m — Sign in with Claude Max/Pro subscription (opens browser)");
+    println!("     Run \x1b[1mccx\x1b[0m and type \x1b[1m/login\x1b[0m");
+    println!();
+    println!("  \x1b[38;2;138;99;210m2.\x1b[0m \x1b[1mClaude API key\x1b[0m");
+    println!("     export ANTHROPIC_API_KEY=\"sk-ant-...\"");
+    println!("     Get one at: https://console.anthropic.com/settings/keys");
+    println!();
+    println!("  \x1b[38;2;138;99;210m3.\x1b[0m \x1b[1mFree models via OpenRouter\x1b[0m (no subscription needed)");
+    println!("     export OPENROUTER_API_KEY=\"sk-or-...\"");
+    println!("     ccx --provider openrouter --model \"nvidia/nemotron-3-super-120b-a12b:free\"");
+    println!("     Get a free key at: https://openrouter.ai/keys");
+    println!();
+    if !print_mode {
+        println!("\x1b[90mStarting interactive mode — type /login to authenticate.\x1b[0m");
+        println!();
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_chat(
     model: &str,
@@ -324,27 +349,76 @@ async fn run_chat(
     // Resolve client based on provider.
     let or_key_env = std::env::var("OPENROUTER_API_KEY").ok();
 
-    let (client, auth_source, email): (ccx_api::ApiClient, String, Option<String>) = match provider
-    {
-        "openrouter" => {
-            let key = openrouter_key.or(or_key_env.as_deref()).ok_or(
-                "OpenRouter API key required: set OPENROUTER_API_KEY or use --openrouter-key",
-            )?;
-            let client = ccx_api::ApiClient::OpenAi(ccx_api::OpenAiClient::openrouter(key, model));
-            (client, "OpenRouter".to_string(), None)
-        }
-        _ => {
-            let auth = ccx_auth::resolve_auth(explicit_key)?;
-            let email = if let Some(token) = auth.oauth_token() {
-                ccx_auth::fetch_oauth_email(token).await
-            } else {
-                None
-            };
-            let client = ccx_api::ApiClient::Claude(ccx_api::ClaudeClient::with_auth(&auth, model));
-            let auth_source = auth.display_label().to_string();
-            (client, auth_source, email)
-        }
-    };
+    let (client, auth_source, email, no_auth): (ccx_api::ApiClient, String, Option<String>, bool) =
+        match provider {
+            "openrouter" => {
+                let key = openrouter_key.or(or_key_env.as_deref()).ok_or(
+                    "OpenRouter API key required: set OPENROUTER_API_KEY or use --openrouter-key",
+                )?;
+                let client =
+                    ccx_api::ApiClient::OpenAi(ccx_api::OpenAiClient::openrouter(key, model));
+                (client, "OpenRouter".to_string(), None, false)
+            }
+            _ => {
+                match ccx_auth::resolve_auth(explicit_key) {
+                    Ok(auth) => {
+                        let email = if let Some(token) = auth.oauth_token() {
+                            ccx_auth::fetch_oauth_email(token).await
+                        } else {
+                            None
+                        };
+                        let client = ccx_api::ApiClient::Claude(
+                            ccx_api::ClaudeClient::with_auth(&auth, model),
+                        );
+                        let auth_source = auth.display_label().to_string();
+                        (client, auth_source, email, false)
+                    }
+                    Err(_) => {
+                        // Before giving up, check if OpenRouter key is available.
+                        if let Some(ref or_key) = or_key_env {
+                            if !or_key.is_empty() {
+                                let client = ccx_api::ApiClient::OpenAi(
+                                    ccx_api::OpenAiClient::openrouter(or_key, model),
+                                );
+                                (
+                                    client,
+                                    "OpenRouter (auto-detected)".to_string(),
+                                    None,
+                                    false,
+                                )
+                            } else {
+                                // No credentials at all — show guide.
+                                print_auth_guide(print_mode);
+                                if print_mode {
+                                    std::process::exit(1);
+                                }
+                                let auth = ccx_auth::AuthMethod::None;
+                                let client = ccx_api::ApiClient::Claude(
+                                    ccx_api::ClaudeClient::with_auth(&auth, model),
+                                );
+                                (
+                                    client,
+                                    auth.display_label().to_string(),
+                                    None,
+                                    true,
+                                )
+                            }
+                        } else {
+                            // No credentials at all — show guide.
+                            print_auth_guide(print_mode);
+                            if print_mode {
+                                std::process::exit(1);
+                            }
+                            let auth = ccx_auth::AuthMethod::None;
+                            let client = ccx_api::ApiClient::Claude(
+                                ccx_api::ClaudeClient::with_auth(&auth, model),
+                            );
+                            (client, auth.display_label().to_string(), None, true)
+                        }
+                    }
+                }
+            }
+        };
 
     // Load settings.
     let settings = ccx_config::load_default_settings().unwrap_or_default();
@@ -528,6 +602,7 @@ async fn run_chat(
                 resume_id,
                 continue_session,
                 effort,
+                no_auth,
             )
             .await?;
         }
@@ -1006,6 +1081,7 @@ async fn run_inline_mode(
     resume_id: Option<&str>,
     continue_session: bool,
     effort: &str,
+    mut no_auth: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let tool_count = tool_names.len();
     let mut current_model = model.to_string();
@@ -1218,9 +1294,30 @@ async fn run_inline_mode(
                             match tokio::runtime::Handle::current()
                                 .block_on(ccx_auth::oauth::login())
                             {
-                                Ok(_) => println!(
-                                    "Login successful! Restart ccx to use your subscription."
-                                ),
+                                Ok(_) => {
+                                    println!(
+                                        "\x1b[32mLogin successful!\x1b[0m Restart ccx to use your subscription."
+                                    );
+                                    if no_auth {
+                                        // Re-check auth after login.
+                                        if let Ok(auth) = ccx_auth::resolve_auth(None) {
+                                            if !auth.is_none() {
+                                                no_auth = false;
+                                                let new_client = ccx_api::ApiClient::Claude(
+                                                    ccx_api::ClaudeClient::with_auth(
+                                                        &auth,
+                                                        agent.model(),
+                                                    ),
+                                                );
+                                                agent.set_client(new_client);
+                                                println!(
+                                                    "\x1b[32mAuthenticated as {}. You can start chatting.\x1b[0m",
+                                                    auth.display_label()
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
                                 Err(e) => println!("\x1b[31mLogin failed: {e}\x1b[0m"),
                             }
                             true
@@ -1544,6 +1641,14 @@ async fn run_inline_mode(
 
                     // No builtin or skill matched — show suggestions.
                     commands::print_suggestions(input, &skill_display);
+                    continue;
+                }
+
+                // Block message sends when not authenticated.
+                if no_auth {
+                    println!(
+                        "\x1b[33mNot authenticated. Type /login or set ANTHROPIC_API_KEY.\x1b[0m"
+                    );
                     continue;
                 }
 

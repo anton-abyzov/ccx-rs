@@ -44,6 +44,12 @@ impl ClaudeClient {
                 use_oauth: true,
                 model: model.into(),
             },
+            ccx_auth::AuthMethod::None => Self {
+                http: reqwest::Client::new(),
+                api_key: String::new(),
+                use_oauth: false,
+                model: model.into(),
+            },
         }
     }
 

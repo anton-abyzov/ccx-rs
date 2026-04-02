@@ -46,6 +46,8 @@ pub enum AuthMethod {
         access_token: String,
         subscription_type: String,
     },
+    /// Not authenticated yet — user needs to /login or set an API key.
+    None,
 }
 
 impl AuthMethod {
@@ -61,6 +63,7 @@ impl AuthMethod {
                 "team" => "Claude Team",
                 _ => "Claude Subscription",
             },
+            AuthMethod::None => "Not authenticated",
         }
     }
 
@@ -70,6 +73,11 @@ impl AuthMethod {
             AuthMethod::OAuthToken { access_token, .. } => Some(access_token),
             _ => None,
         }
+    }
+
+    /// Returns true if no credentials are available.
+    pub fn is_none(&self) -> bool {
+        matches!(self, AuthMethod::None)
     }
 }
 
