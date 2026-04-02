@@ -79,6 +79,10 @@ pub const COMMANDS: &[SlashCommand] = &[
         name: "/batch",
         description: "Run the batch skill with a prompt",
     },
+    SlashCommand {
+        name: "/plugins",
+        description: "List installed plugins and skills",
+    },
 ];
 
 /// Find commands matching a prefix (e.g., "/he" matches "/help").

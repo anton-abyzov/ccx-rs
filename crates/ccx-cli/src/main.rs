@@ -151,6 +151,8 @@ enum Commands {
     },
     /// Show version and crate information
     Info,
+    /// Update ccx to the latest version
+    Update,
 }
 
 #[tokio::main]
@@ -270,6 +272,119 @@ async fn main() {
         }
         Commands::Info => {
             print_info();
+        }
+        Commands::Update => {
+            run_update();
+        }
+    }
+}
+
+fn run_update() {
+    println!("Checking for updates...");
+
+    let current_version = env!("CARGO_PKG_VERSION");
+    println!("Current version: v{current_version}");
+
+    let output = std::process::Command::new("curl")
+        .args([
+            "-sL",
+            "https://api.github.com/repos/anton-abyzov/ccx-rs/releases/latest",
+        ])
+        .output();
+
+    match output {
+        Ok(out) => {
+            let body = String::from_utf8_lossy(&out.stdout);
+            if let Some(tag) = body
+                .split("\"tag_name\":\"")
+                .nth(1)
+                .or_else(|| body.split("\"tag_name\": \"").nth(1))
+                .and_then(|s| s.split('"').next())
+            {
+                let latest = tag.trim_start_matches('v');
+                println!("Latest version:  v{latest}");
+
+                if latest == current_version {
+                    println!("\n\x1b[32m✓ Already up to date!\x1b[0m");
+                } else {
+                    println!("\nUpdating to v{latest}...");
+
+                    let artifact = if cfg!(target_os = "macos") && cfg!(target_arch = "aarch64") {
+                        "ccx-macos-arm64"
+                    } else if cfg!(target_os = "macos") {
+                        "ccx-macos-x64"
+                    } else if cfg!(target_os = "linux") && cfg!(target_arch = "aarch64") {
+                        "ccx-linux-arm64"
+                    } else if cfg!(target_os = "linux") {
+                        "ccx-linux-x64"
+                    } else if cfg!(target_os = "windows") {
+                        "ccx-windows-x64.exe"
+                    } else {
+                        eprintln!("Unsupported platform. Update manually from: https://github.com/anton-abyzov/ccx-rs/releases");
+                        std::process::exit(1);
+                    };
+
+                    let url = format!(
+                        "https://github.com/anton-abyzov/ccx-rs/releases/download/{tag}/{artifact}"
+                    );
+                    let tmp = "/tmp/ccx-update";
+
+                    let dl = std::process::Command::new("curl")
+                        .args(["-fsSL", &url, "-o", tmp])
+                        .status();
+
+                    match dl {
+                        Ok(s) if s.success() => {
+                            #[cfg(unix)]
+                            {
+                                std::process::Command::new("chmod")
+                                    .args(["+x", tmp])
+                                    .status()
+                                    .ok();
+                            }
+
+                            let current_exe = std::env::current_exe().unwrap_or_default();
+                            let install_path = current_exe.to_string_lossy().to_string();
+
+                            println!("Installing to {install_path}...");
+
+                            let mv = std::process::Command::new("mv")
+                                .args([tmp, &install_path])
+                                .status();
+
+                            if mv.map(|s| s.success()).unwrap_or(false) {
+                                println!("\n\x1b[32m✓ Updated to v{latest}!\x1b[0m");
+                            } else {
+                                println!("Requires elevated permissions...");
+                                let sudo_mv = std::process::Command::new("sudo")
+                                    .args(["mv", tmp, &install_path])
+                                    .status();
+                                if sudo_mv.map(|s| s.success()).unwrap_or(false) {
+                                    println!("\n\x1b[32m✓ Updated to v{latest}!\x1b[0m");
+                                } else {
+                                    eprintln!(
+                                        "Failed to install. Try manually: sudo mv {tmp} {install_path}"
+                                    );
+                                }
+                            }
+                        }
+                        _ => {
+                            eprintln!(
+                                "Download failed. Try manually: curl -fsSL {url} -o ccx && chmod +x ccx"
+                            );
+                        }
+                    }
+                }
+            } else {
+                eprintln!(
+                    "Could not determine latest version. Visit: https://github.com/anton-abyzov/ccx-rs/releases"
+                );
+            }
+        }
+        Err(_) => {
+            eprintln!(
+                "curl not found. Visit: https://github.com/anton-abyzov/ccx-rs/releases"
+            );
         }
     }
 }
@@ -1669,6 +1784,132 @@ async fn run_inline_mode(
                             } else {
                                 println!("\x1b[33mUsage: /batch <prompt>\x1b[0m");
                             }
+                            true
+                        }
+                        "/plugins" => {
+                            const P_ACCENT: &str = "\x1b[38;2;138;99;210m";
+                            const P_DIM: &str = "\x1b[90m";
+                            const P_BOLD: &str = "\x1b[1m";
+                            const P_RESET: &str = "\x1b[0m";
+
+                            println!("\n{P_BOLD}Installed Plugins:{P_RESET}\n");
+
+                            let home = dirs::home_dir().unwrap_or_default();
+                            let user_plugins = home.join(".claude/plugins");
+                            let project_plugins = std::path::PathBuf::from(".claude/plugins");
+                            let marketplace = home.join(".claude/plugins/marketplaces");
+
+                            let mut count = 0;
+
+                            // User plugins
+                            if user_plugins.exists() {
+                                for entry in
+                                    std::fs::read_dir(&user_plugins).into_iter().flatten().flatten()
+                                {
+                                    if entry.path().is_dir()
+                                        && entry.file_name() != "marketplaces"
+                                    {
+                                        let name =
+                                            entry.file_name().to_string_lossy().to_string();
+                                        println!(
+                                            "  {P_ACCENT}{name}{P_RESET} {P_DIM}(user){P_RESET}"
+                                        );
+                                        count += 1;
+                                    }
+                                }
+                            }
+
+                            // Project plugins
+                            if project_plugins.exists() {
+                                for entry in std::fs::read_dir(&project_plugins)
+                                    .into_iter()
+                                    .flatten()
+                                    .flatten()
+                                {
+                                    if entry.path().is_dir() {
+                                        let name =
+                                            entry.file_name().to_string_lossy().to_string();
+                                        println!(
+                                            "  {P_ACCENT}{name}{P_RESET} {P_DIM}(project){P_RESET}"
+                                        );
+                                        count += 1;
+                                    }
+                                }
+                            }
+
+                            // Marketplace plugins
+                            if marketplace.exists() {
+                                for mp in
+                                    std::fs::read_dir(&marketplace).into_iter().flatten().flatten()
+                                {
+                                    if mp.path().is_dir() {
+                                        let mp_name =
+                                            mp.file_name().to_string_lossy().to_string();
+                                        let plugins_dir = mp.path().join("plugins");
+                                        if plugins_dir.exists() {
+                                            for entry in std::fs::read_dir(&plugins_dir)
+                                                .into_iter()
+                                                .flatten()
+                                                .flatten()
+                                            {
+                                                if entry.path().is_dir() {
+                                                    let name = entry
+                                                        .file_name()
+                                                        .to_string_lossy()
+                                                        .to_string();
+                                                    println!(
+                                                        "  {P_ACCENT}{name}{P_RESET} {P_DIM}(marketplace: {mp_name}){P_RESET}"
+                                                    );
+                                                    count += 1;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // SpecWeave plugins (from nvm)
+                            let nvm_base = home.join(".nvm/versions/node");
+                            if nvm_base.exists() {
+                                // Deduplicate across node versions
+                                let mut seen = HashSet::new();
+                                for ver in
+                                    std::fs::read_dir(&nvm_base).into_iter().flatten().flatten()
+                                {
+                                    let plugins_dir =
+                                        ver.path().join("lib/node_modules/specweave/plugins");
+                                    if plugins_dir.exists() {
+                                        for entry in std::fs::read_dir(&plugins_dir)
+                                            .into_iter()
+                                            .flatten()
+                                            .flatten()
+                                        {
+                                            if entry.path().is_dir() {
+                                                let name = entry
+                                                    .file_name()
+                                                    .to_string_lossy()
+                                                    .to_string();
+                                                if seen.insert(name.clone()) {
+                                                    println!(
+                                                        "  {P_ACCENT}{name}{P_RESET} {P_DIM}(specweave){P_RESET}"
+                                                    );
+                                                    count += 1;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            if count == 0 {
+                                println!("  {P_DIM}No plugins installed{P_RESET}");
+                            }
+                            println!("\n  {P_DIM}Total: {count} plugin(s){P_RESET}");
+                            println!(
+                                "  {P_DIM}Skills discovered: {}{P_RESET}",
+                                skill_display.len()
+                            );
+                            println!();
                             true
                         }
                         "/" => {
