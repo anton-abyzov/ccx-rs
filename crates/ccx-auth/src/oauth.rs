@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 const CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const AUTH_URL: &str = "https://claude.com/cai/oauth/authorize";
 const TOKEN_URL: &str = "https://platform.claude.com/v1/oauth/token";
-const SCOPES: &str = "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload";
+const SCOPES: &str = "org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload";
 
 /// OAuth tokens returned after a successful login.
 #[derive(Debug)]
@@ -63,17 +63,19 @@ pub async fn login() -> Result<OAuthTokens, Box<dyn std::error::Error>> {
     stream.flush()?;
     drop(stream);
 
-    // 6. Exchange code for token.
+    // 6. Exchange code for token (JSON body, matching Claude Code's format).
     let client = reqwest::Client::new();
     let token_response = client
         .post(TOKEN_URL)
-        .form(&[
-            ("grant_type", "authorization_code"),
-            ("client_id", CLIENT_ID),
-            ("code", &code),
-            ("redirect_uri", &redirect_uri),
-            ("code_verifier", &code_verifier),
-        ])
+        .header("Content-Type", "application/json")
+        .json(&serde_json::json!({
+            "grant_type": "authorization_code",
+            "client_id": CLIENT_ID,
+            "code": code,
+            "redirect_uri": redirect_uri,
+            "code_verifier": code_verifier,
+            "state": state,
+        }))
         .send()
         .await?;
 
