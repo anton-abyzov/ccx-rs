@@ -86,6 +86,8 @@ impl OpenAiClient {
             "messages": messages,
             "stream": true,
             "max_tokens": req.max_tokens,
+            // Request usage stats in streaming mode (OpenAI requires this opt-in).
+            "stream_options": { "include_usage": true },
         });
 
         if let Some(tools) = tools
@@ -96,6 +98,8 @@ impl OpenAiClient {
         if let Some(temp) = req.temperature {
             body["temperature"] = serde_json::json!(temp);
         }
+        // Anthropic-specific `thinking` config must NOT be sent to OpenAI.
+        // The body is built manually above, so it's excluded by default.
 
         let mut headers = HeaderMap::new();
         let bearer = format!("Bearer {}", self.api_key);
@@ -309,6 +313,9 @@ fn convert_messages(messages: &[InputMessage], system: Option<&str>) -> Vec<Open
                             ContentBlock::Text { text } => {
                                 text_parts.push(text.clone());
                             }
+                            // Strip thinking blocks from user messages (shouldn't
+                            // appear here, but be defensive).
+                            ContentBlock::Thinking { .. } => {}
                             _ => {}
                         }
                     }
@@ -339,8 +346,17 @@ fn convert_messages(messages: &[InputMessage], system: Option<&str>) -> Vec<Open
                                     },
                                 });
                             }
+                            // Strip Anthropic thinking blocks — OpenAI doesn't
+                            // understand them and they'd cause parse errors.
+                            ContentBlock::Thinking { .. } => {}
                             _ => {}
                         }
+                    }
+                    // Skip entirely empty assistant messages (e.g., messages that
+                    // only contained thinking blocks). OpenAI rejects assistant
+                    // messages with null content and no tool_calls.
+                    if text_content.is_empty() && tool_calls.is_empty() {
+                        continue;
                     }
                     result.push(OpenAiMessage {
                         role: "assistant".into(),
@@ -636,8 +652,25 @@ fn process_chunk(chunk: OpenAiChunk, state: &mut OpenAiStreamState) {
         }
     }
 
-    // Finish reason.
+    // Finish reason — close all open blocks then emit MessageDelta.
     if let Some(reason) = &choice.finish_reason {
+        // Emit ContentBlockStop for every block that was opened.
+        if let Some(idx) = state.thinking_block_idx {
+            state
+                .pending
+                .push_back(Ok(StreamEvent::ContentBlockStop { index: idx }));
+        }
+        if let Some(idx) = state.text_block_idx {
+            state
+                .pending
+                .push_back(Ok(StreamEvent::ContentBlockStop { index: idx }));
+        }
+        for &idx in state.tool_blocks.values() {
+            state
+                .pending
+                .push_back(Ok(StreamEvent::ContentBlockStop { index: idx }));
+        }
+
         let stop_reason = match reason.as_str() {
             "stop" => Some(StopReason::EndTurn),
             "tool_calls" => Some(StopReason::ToolUse),
@@ -898,5 +931,124 @@ mod tests {
             })
             .collect();
         assert_eq!(text_deltas.len(), 1, "expected 1 text delta");
+    }
+
+    #[test]
+    fn test_thinking_blocks_stripped_from_assistant() {
+        // Assistant message with thinking + text: thinking should be stripped.
+        let messages = vec![InputMessage {
+            role: Role::Assistant,
+            content: MessageContent::Blocks(vec![
+                ContentBlock::Thinking {
+                    thinking: "Let me reason about this...".into(),
+                    signature: Some("sig_abc".into()),
+                },
+                ContentBlock::Text {
+                    text: "The answer is 42.".into(),
+                },
+            ]),
+        }];
+        let converted = convert_messages(&messages, None);
+        assert_eq!(converted.len(), 1);
+        assert_eq!(converted[0].role, "assistant");
+        assert_eq!(
+            converted[0].content.as_deref(),
+            Some("The answer is 42.")
+        );
+        assert!(converted[0].tool_calls.is_none());
+    }
+
+    #[test]
+    fn test_thinking_only_assistant_message_dropped() {
+        // Assistant message with ONLY thinking blocks: should be dropped entirely.
+        let messages = vec![
+            InputMessage {
+                role: Role::User,
+                content: MessageContent::Text("What is 2+2?".into()),
+            },
+            InputMessage {
+                role: Role::Assistant,
+                content: MessageContent::Blocks(vec![ContentBlock::Thinking {
+                    thinking: "Hmm, let me think...".into(),
+                    signature: None,
+                }]),
+            },
+            InputMessage {
+                role: Role::User,
+                content: MessageContent::Text("Well?".into()),
+            },
+        ];
+        let converted = convert_messages(&messages, None);
+        // The thinking-only assistant message should be dropped.
+        assert_eq!(converted.len(), 2);
+        assert_eq!(converted[0].role, "user");
+        assert_eq!(converted[1].role, "user");
+    }
+
+    #[tokio::test]
+    async fn test_content_block_stop_emitted() {
+        // Verify that ContentBlockStop events are emitted when finish_reason arrives.
+        let raw = concat!(
+            "data: {\"id\":\"gen-4\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Hello\"},\"finish_reason\":null}]}\n\n",
+            "data: {\"id\":\"gen-4\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+
+        let byte_stream = futures::stream::iter(vec![Ok(bytes::Bytes::from(raw))]);
+        let mut event_stream = openai_sse_to_events(byte_stream);
+        let mut events = Vec::new();
+        while let Some(event) = event_stream.next().await {
+            events.push(event.unwrap());
+        }
+
+        let stop_events: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e, StreamEvent::ContentBlockStop { .. }))
+            .collect();
+        assert!(
+            !stop_events.is_empty(),
+            "expected at least one ContentBlockStop event"
+        );
+
+        // MessageDelta should come after all stops.
+        assert!(matches!(
+            events.last(),
+            Some(StreamEvent::MessageDelta { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_usage_from_separate_chunk() {
+        // OpenAI sends usage in a separate chunk with empty choices when
+        // stream_options.include_usage is true.
+        let raw = concat!(
+            "data: {\"id\":\"gen-5\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hi\"},\"finish_reason\":null}]}\n\n",
+            "data: {\"id\":\"gen-5\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: {\"id\":\"gen-5\",\"choices\":[],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":50}}\n\n",
+            "data: [DONE]\n\n",
+        );
+
+        let byte_stream = futures::stream::iter(vec![Ok(bytes::Bytes::from(raw))]);
+        let mut event_stream = openai_sse_to_events(byte_stream);
+        let mut events = Vec::new();
+        while let Some(event) = event_stream.next().await {
+            events.push(event.unwrap());
+        }
+
+        // Find the usage event from the separate chunk.
+        let usage_events: Vec<_> = events
+            .iter()
+            .filter(|e| {
+                if let StreamEvent::MessageDelta { usage, .. } = e {
+                    usage.is_some()
+                } else {
+                    false
+                }
+            })
+            .collect();
+        assert!(
+            !usage_events.is_empty(),
+            "expected a MessageDelta with usage data"
+        );
     }
 }
