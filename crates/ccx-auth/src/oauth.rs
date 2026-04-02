@@ -7,9 +7,9 @@ use rand::Rng;
 use sha2::{Digest, Sha256};
 
 const CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
-const AUTH_URL: &str = "https://claude.ai/oauth/authorize";
+const AUTH_URL: &str = "https://claude.com/cai/oauth/authorize";
 const TOKEN_URL: &str = "https://platform.claude.com/v1/oauth/token";
-const SCOPES: &str = "user:profile user:inference";
+const SCOPES: &str = "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload";
 
 /// OAuth tokens returned after a successful login.
 #[derive(Debug)]
@@ -29,11 +29,11 @@ pub async fn login() -> Result<OAuthTokens, Box<dyn std::error::Error>> {
     // 2. Start local HTTP server on a random port.
     let listener = TcpListener::bind("127.0.0.1:0")?;
     let port = listener.local_addr()?.port();
-    let redirect_uri = format!("http://localhost:{}/oauth/callback", port);
+    let redirect_uri = format!("http://localhost:{}/callback", port);
 
-    // 3. Build authorize URL.
+    // 3. Build authorize URL (matches Claude Code's exact format).
     let auth_url = format!(
-        "{}?response_type=code&client_id={}&redirect_uri={}&scope={}&code_challenge={}&code_challenge_method=S256&state={}",
+        "{}?code=true&response_type=code&client_id={}&redirect_uri={}&scope={}&code_challenge={}&code_challenge_method=S256&state={}",
         AUTH_URL,
         CLIENT_ID,
         urlencoding::encode(&redirect_uri),
@@ -131,7 +131,7 @@ fn extract_code_from_request(
     let mut request_line = String::new();
     reader.read_line(&mut request_line)?;
 
-    // Parse: GET /oauth/callback?code=XYZ&state=ABC HTTP/1.1
+    // Parse: GET /callback?code=XYZ&state=ABC HTTP/1.1
     let path = request_line
         .split_whitespace()
         .nth(1)
