@@ -128,6 +128,10 @@ fn render_right_panel(frame: &mut Frame, area: Rect) {
             " Type /help for all commands",
             Theme::panel_body(),
         )),
+        Line::from(Span::styled(
+            " Press Tab after / for autocomplete",
+            Theme::panel_body(),
+        )),
         Line::from(Span::styled(" Ctrl+C to quit", Theme::panel_body())),
         Line::from(""),
         Line::from(Span::styled("─".repeat(sep_width), Theme::separator())),

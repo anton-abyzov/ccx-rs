@@ -18,6 +18,9 @@
 curl -fsSL https://raw.githubusercontent.com/anton-abyzov/ccx-rs/main/install.sh | sh
 ```
 
+> **No curl?** Use wget: `wget -qO- https://raw.githubusercontent.com/anton-abyzov/ccx-rs/main/install.sh | sh`
+> Or install curl first: `apt install curl` (Linux) / `brew install curl` (macOS)
+
 ### Windows (PowerShell)
 
 ```powershell

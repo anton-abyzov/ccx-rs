@@ -137,6 +137,7 @@ pub fn render_welcome(
         " Type a message to start coding".to_string(),
         " Run /init to create a CLAUDE.md".to_string(),
         " Type /help for commands".to_string(),
+        " Press Tab after / for autocomplete".to_string(),
         " Ctrl+C to quit".to_string(),
         format!(" {DIM}{sep}{RESET}"),
         format!("{ACCENT_BOLD} Recent activity{RESET}"),

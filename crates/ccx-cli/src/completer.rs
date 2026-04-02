@@ -56,14 +56,26 @@ impl Completer for CcxCompleter {
             })
             .collect();
 
-        // Discovered skills
+        // Discovered skills (limit to 10 to avoid flooding the terminal)
+        let mut skill_count = 0;
         for (name, desc) in &self.skill_commands {
             if name.starts_with(line) {
-                matches.push(Pair {
-                    display: format!("{name} — {desc}"),
-                    replacement: format!("{name} "),
-                });
+                if skill_count < 10 {
+                    matches.push(Pair {
+                        display: format!("{name} — {desc}"),
+                        replacement: format!("{name} "),
+                    });
+                }
+                skill_count += 1;
             }
+        }
+
+        // If more skills were hidden, add a hint
+        if skill_count > 10 {
+            matches.push(Pair {
+                display: format!("[+{} more skills — keep typing to filter]", skill_count - 10),
+                replacement: line.to_string(),
+            });
         }
 
         Ok((0, matches))
