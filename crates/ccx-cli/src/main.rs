@@ -397,18 +397,17 @@ async fn run_auth(action: &str) {
             println!();
         }
         "login" => {
-            println!("Set up authentication with an API key:");
-            println!();
-            println!("  Anthropic:   export ANTHROPIC_API_KEY=\"sk-ant-...\"");
-            println!("               Get key: https://console.anthropic.com/settings/keys");
-            println!();
-            println!("  OpenRouter:  export OPENROUTER_API_KEY=\"sk-or-...\"");
-            println!("               Get key: https://openrouter.ai/keys");
-            println!();
-            println!("  OpenAI:      export OPENAI_API_KEY=\"sk-...\"");
-            println!("               Get key: https://platform.openai.com/api-keys");
-            println!();
-            println!("Or run `ccx chat` to use the interactive setup wizard.");
+            let login_result = if claude_cli_available() {
+                println!("Launching Claude auth...");
+                run_claude_cli_login()
+            } else {
+                ccx_auth::oauth::login().await.map(|_| ())
+            };
+
+            match login_result {
+                Ok(_) => println!("\x1b[32m✓ Login successful!\x1b[0m"),
+                Err(e) => eprintln!("\x1b[31mLogin failed: {e}\x1b[0m"),
+            }
         }
         "logout" => {
             println!("Clearing credentials...");
@@ -471,42 +470,42 @@ fn run_mcp(action: &str, name: Option<&str>, command: Option<&str>, args: &[Stri
             // Project-level .mcp.json
             if mcp_path.exists()
                 && let Ok(content) = std::fs::read_to_string(&mcp_path)
-                    && let Ok(config) = serde_json::from_str::<serde_json::Value>(&content)
-                        && let Some(servers) = config["mcpServers"].as_object() {
-                            for (name, server) in servers {
-                                let cmd = server["command"].as_str().unwrap_or("unknown");
-                                let srv_args = server["args"]
-                                    .as_array()
-                                    .map(|a| {
-                                        a.iter()
-                                            .filter_map(|v| v.as_str())
-                                            .collect::<Vec<_>>()
-                                            .join(" ")
-                                    })
-                                    .unwrap_or_default();
-                                println!(
-                                    "  {GREEN}●{RESET} {BOLD}{name}{RESET} — {DIM}{cmd} {srv_args}{RESET}"
-                                );
-                                found = true;
-                            }
-                        }
+                && let Ok(config) = serde_json::from_str::<serde_json::Value>(&content)
+                && let Some(servers) = config["mcpServers"].as_object()
+            {
+                for (name, server) in servers {
+                    let cmd = server["command"].as_str().unwrap_or("unknown");
+                    let srv_args = server["args"]
+                        .as_array()
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|v| v.as_str())
+                                .collect::<Vec<_>>()
+                                .join(" ")
+                        })
+                        .unwrap_or_default();
+                    println!(
+                        "  {GREEN}●{RESET} {BOLD}{name}{RESET} — {DIM}{cmd} {srv_args}{RESET}"
+                    );
+                    found = true;
+                }
+            }
 
             // Global MCP config
             let global_mcp = dirs::home_dir().unwrap().join(".claude/mcp.json");
             if global_mcp.exists()
                 && let Ok(content) = std::fs::read_to_string(&global_mcp)
-                    && let Ok(config) = serde_json::from_str::<serde_json::Value>(&content)
-                        && let Some(servers) = config["mcpServers"].as_object()
-                            && !servers.is_empty() {
-                                println!("\n  {DIM}Global (~/.claude/mcp.json):{RESET}");
-                                for (name, server) in servers {
-                                    let cmd = server["command"].as_str().unwrap_or("unknown");
-                                    println!(
-                                        "  {GREEN}●{RESET} {BOLD}{name}{RESET} — {DIM}{cmd}{RESET}"
-                                    );
-                                    found = true;
-                                }
-                            }
+                && let Ok(config) = serde_json::from_str::<serde_json::Value>(&content)
+                && let Some(servers) = config["mcpServers"].as_object()
+                && !servers.is_empty()
+            {
+                println!("\n  {DIM}Global (~/.claude/mcp.json):{RESET}");
+                for (name, server) in servers {
+                    let cmd = server["command"].as_str().unwrap_or("unknown");
+                    println!("  {GREEN}●{RESET} {BOLD}{name}{RESET} — {DIM}{cmd}{RESET}");
+                    found = true;
+                }
+            }
 
             if !found {
                 println!("  {DIM}No MCP servers configured{RESET}");
@@ -535,9 +534,8 @@ fn run_mcp(action: &str, name: Option<&str>, command: Option<&str>, args: &[Stri
             // Read or create .mcp.json
             let mut config: serde_json::Value = if mcp_path.exists() {
                 let content = std::fs::read_to_string(&mcp_path).unwrap_or_default();
-                serde_json::from_str(&content).unwrap_or_else(|_| {
-                    serde_json::json!({"mcpServers": {}})
-                })
+                serde_json::from_str(&content)
+                    .unwrap_or_else(|_| serde_json::json!({"mcpServers": {}}))
             } else {
                 serde_json::json!({"mcpServers": {}})
             };
@@ -584,10 +582,8 @@ fn run_mcp(action: &str, name: Option<&str>, command: Option<&str>, args: &[Stri
 
             if let Some(servers) = config["mcpServers"].as_object_mut() {
                 if servers.remove(name).is_some() {
-                    match std::fs::write(
-                        &mcp_path,
-                        serde_json::to_string_pretty(&config).unwrap(),
-                    ) {
+                    match std::fs::write(&mcp_path, serde_json::to_string_pretty(&config).unwrap())
+                    {
                         Ok(_) => println!("\x1b[32m✓ Removed MCP server '{name}'\x1b[0m"),
                         Err(e) => eprintln!("\x1b[31mFailed to write .mcp.json: {e}\x1b[0m"),
                     }
@@ -636,10 +632,7 @@ fn path_contains_dir(path_env: &std::ffi::OsStr, dir: &std::path::Path) -> bool 
 fn preferred_user_bin_dir() -> std::path::PathBuf {
     let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
     for candidate in [home.join(".local/bin"), home.join("bin")] {
-        if path_contains_dir(
-            &std::env::var_os("PATH").unwrap_or_default(),
-            &candidate,
-        ) {
+        if path_contains_dir(&std::env::var_os("PATH").unwrap_or_default(), &candidate) {
             return candidate;
         }
     }
@@ -768,7 +761,12 @@ fn copy_binary_to_path(
     {
         use std::os::unix::fs::PermissionsExt;
         let mut perms = std::fs::metadata(install_path)
-            .map_err(|e| format!("failed to read permissions for {}: {e}", install_path.display()))?
+            .map_err(|e| {
+                format!(
+                    "failed to read permissions for {}: {e}",
+                    install_path.display()
+                )
+            })?
             .permissions();
         perms.set_mode(0o755);
         std::fs::set_permissions(install_path, perms)
@@ -912,130 +910,149 @@ fn run_update() {
                         );
                     }
                     std::cmp::Ordering::Greater => {
-                    println!("\nUpdating to v{latest}...");
+                        println!("\nUpdating to v{latest}...");
 
-                    let artifact = if cfg!(target_os = "macos") && cfg!(target_arch = "aarch64") {
-                        "ccx-macos-arm64"
-                    } else if cfg!(target_os = "macos") {
-                        "ccx-macos-x64"
-                    } else if cfg!(target_os = "linux") && cfg!(target_arch = "aarch64") {
-                        "ccx-linux-arm64"
-                    } else if cfg!(target_os = "linux") {
-                        "ccx-linux-x64"
-                    } else if cfg!(target_os = "windows") {
-                        "ccx-windows-x64.exe"
-                    } else {
-                        eprintln!("Unsupported platform. Update manually from: https://github.com/anton-abyzov/ccx-rs/releases");
-                        std::process::exit(1);
-                    };
+                        let artifact = if cfg!(target_os = "macos") && cfg!(target_arch = "aarch64")
+                        {
+                            "ccx-macos-arm64"
+                        } else if cfg!(target_os = "macos") {
+                            "ccx-macos-x64"
+                        } else if cfg!(target_os = "linux") && cfg!(target_arch = "aarch64") {
+                            "ccx-linux-arm64"
+                        } else if cfg!(target_os = "linux") {
+                            "ccx-linux-x64"
+                        } else if cfg!(target_os = "windows") {
+                            "ccx-windows-x64.exe"
+                        } else {
+                            eprintln!(
+                                "Unsupported platform. Update manually from: https://github.com/anton-abyzov/ccx-rs/releases"
+                            );
+                            std::process::exit(1);
+                        };
 
-                    let url = format!(
-                        "https://github.com/anton-abyzov/ccx-rs/releases/download/{tag}/{artifact}"
-                    );
-                    let tmp = std::env::temp_dir().join(format!(
-                        "ccx-update-{}{}",
-                        std::process::id(),
-                        if cfg!(target_os = "windows") { ".exe" } else { "" }
-                    ));
-                    let tmp_str = tmp.to_string_lossy().to_string();
+                        let url = format!(
+                            "https://github.com/anton-abyzov/ccx-rs/releases/download/{tag}/{artifact}"
+                        );
+                        let tmp = std::env::temp_dir().join(format!(
+                            "ccx-update-{}{}",
+                            std::process::id(),
+                            if cfg!(target_os = "windows") {
+                                ".exe"
+                            } else {
+                                ""
+                            }
+                        ));
+                        let tmp_str = tmp.to_string_lossy().to_string();
 
-                    let dl = std::process::Command::new("curl")
-                        .args(["-fsSL", &url, "-o", &tmp_str])
-                        .status()
-                        .or_else(|_| {
-                            std::process::Command::new("wget")
-                                .args(["-q", &url, "-O", &tmp_str])
-                                .status()
-                        });
+                        let dl = std::process::Command::new("curl")
+                            .args(["-fsSL", &url, "-o", &tmp_str])
+                            .status()
+                            .or_else(|_| {
+                                std::process::Command::new("wget")
+                                    .args(["-q", &url, "-O", &tmp_str])
+                                    .status()
+                            });
 
-                    match dl {
-                        Ok(s) if s.success() => {
-                            let current_exe =
-                                std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::new());
-                            let current_dir = current_exe.parent().map(std::path::Path::to_path_buf);
-                            let install_target = if cfg!(target_os = "windows") {
-                                preferred_user_bin_dir().join(ccx_binary_name())
-                            } else if let Some(dir) = &current_dir {
-                                if is_dir_writable(dir) {
-                                    current_exe.clone()
+                        match dl {
+                            Ok(s) if s.success() => {
+                                let current_exe = std::env::current_exe()
+                                    .unwrap_or_else(|_| std::path::PathBuf::new());
+                                let current_dir =
+                                    current_exe.parent().map(std::path::Path::to_path_buf);
+                                let install_target = if cfg!(target_os = "windows") {
+                                    preferred_user_bin_dir().join(ccx_binary_name())
+                                } else if let Some(dir) = &current_dir {
+                                    if is_dir_writable(dir) {
+                                        current_exe.clone()
+                                    } else {
+                                        preferred_user_bin_dir().join(ccx_binary_name())
+                                    }
                                 } else {
                                     preferred_user_bin_dir().join(ccx_binary_name())
-                                }
-                            } else {
-                                preferred_user_bin_dir().join(ccx_binary_name())
-                            };
+                                };
 
-                            let install_result = install_downloaded_binary(&tmp, &install_target);
+                                let install_result =
+                                    install_downloaded_binary(&tmp, &install_target);
 
-                            if install_result.is_ok() {
-                                let install_dir = install_target
-                                    .parent()
-                                    .map(std::path::Path::to_path_buf)
-                                    .unwrap_or_else(preferred_user_bin_dir);
-                                let install_moved = current_dir.as_ref() != Some(&install_dir);
-                                let path_env = std::env::var_os("PATH").unwrap_or_default();
-                                let install_target_key = install_target
-                                    .canonicalize()
-                                    .unwrap_or_else(|_| install_target.clone());
-                                let install_preferred = active_ccx_binary_on_path()
-                                    .map(|path| path.canonicalize().unwrap_or(path))
-                                    == Some(install_target_key);
+                                if install_result.is_ok() {
+                                    let install_dir = install_target
+                                        .parent()
+                                        .map(std::path::Path::to_path_buf)
+                                        .unwrap_or_else(preferred_user_bin_dir);
+                                    let install_moved = current_dir.as_ref() != Some(&install_dir);
+                                    let path_env = std::env::var_os("PATH").unwrap_or_default();
+                                    let install_target_key = install_target
+                                        .canonicalize()
+                                        .unwrap_or_else(|_| install_target.clone());
+                                    let install_preferred = active_ccx_binary_on_path()
+                                        .map(|path| path.canonicalize().unwrap_or(path))
+                                        == Some(install_target_key);
 
-                                if install_moved || !install_preferred {
-                                    match ensure_path_block(&install_dir) {
-                                        Ok(Some(profile)) => {
+                                    if install_moved || !install_preferred {
+                                        match ensure_path_block(&install_dir) {
+                                            Ok(Some(profile)) => {
+                                                println!(
+                                                    "\n\x1b[38;2;138;99;210mUpdated shell profile:\x1b[0m {}",
+                                                    profile.display()
+                                                );
+                                            }
+                                            Ok(None) => {}
+                                            Err(err) => {
+                                                eprintln!("\x1b[33mWarning:\x1b[0m {err}");
+                                            }
+                                        }
+                                    }
+
+                                    println!("\n\x1b[32m✓ Updated to v{latest}!\x1b[0m");
+                                    println!("  Installed at: {}", install_target.display());
+
+                                    if install_moved
+                                        || !install_preferred
+                                        || !path_contains_dir(&path_env, &install_dir)
+                                    {
+                                        println!(
+                                            "\n\x1b[38;2;138;99;210mRun in this shell:\x1b[0m"
+                                        );
+                                        if cfg!(target_os = "windows") {
                                             println!(
-                                                "\n\x1b[38;2;138;99;210mUpdated shell profile:\x1b[0m {}",
-                                                profile.display()
+                                                "  $env:Path=\"{};\" + $env:Path",
+                                                install_dir.display()
                                             );
+                                        } else {
+                                            println!(
+                                                "  export PATH=\"{}:$PATH\"",
+                                                install_dir.display()
+                                            );
+                                            println!("  hash -r");
                                         }
-                                        Ok(None) => {}
-                                        Err(err) => {
-                                            eprintln!("\x1b[33mWarning:\x1b[0m {err}");
+                                    }
+
+                                    let (synced, warnings) =
+                                        reconcile_duplicate_binaries(&install_target, latest);
+                                    if !synced.is_empty() {
+                                        println!(
+                                            "\n\x1b[38;2;138;99;210mAlso updated duplicate installs:\x1b[0m"
+                                        );
+                                        for path in synced {
+                                            println!("  {}", path.display());
                                         }
                                     }
-                                }
-
-                                println!("\n\x1b[32m✓ Updated to v{latest}!\x1b[0m");
-                                println!("  Installed at: {}", install_target.display());
-
-                                if install_moved
-                                    || !install_preferred
-                                    || !path_contains_dir(&path_env, &install_dir)
-                                {
-                                    println!("\n\x1b[38;2;138;99;210mRun in this shell:\x1b[0m");
-                                    if cfg!(target_os = "windows") {
-                                        println!("  $env:Path=\"{};\" + $env:Path", install_dir.display());
-                                    } else {
-                                        println!("  export PATH=\"{}:$PATH\"", install_dir.display());
-                                        println!("  hash -r");
+                                    if !warnings.is_empty() {
+                                        eprintln!("\n\x1b[33mWarning:\x1b[0m");
+                                        for warning in warnings {
+                                            eprintln!("  {warning}");
+                                        }
                                     }
+                                } else {
+                                    eprintln!("{}", install_result.err().unwrap_or_default());
                                 }
-
-                                let (synced, warnings) =
-                                    reconcile_duplicate_binaries(&install_target, latest);
-                                if !synced.is_empty() {
-                                    println!("\n\x1b[38;2;138;99;210mAlso updated duplicate installs:\x1b[0m");
-                                    for path in synced {
-                                        println!("  {}", path.display());
-                                    }
-                                }
-                                if !warnings.is_empty() {
-                                    eprintln!("\n\x1b[33mWarning:\x1b[0m");
-                                    for warning in warnings {
-                                        eprintln!("  {warning}");
-                                    }
-                                }
-                            } else {
-                                eprintln!("{}", install_result.err().unwrap_or_default());
+                            }
+                            _ => {
+                                eprintln!(
+                                    "Download failed. Try manually: curl -fsSL {url} -o ccx && chmod +x ccx"
+                                );
                             }
                         }
-                        _ => {
-                            eprintln!(
-                                "Download failed. Try manually: curl -fsSL {url} -o ccx && chmod +x ccx"
-                            );
-                        }
-                    }
                     }
                 }
             } else {
@@ -1045,9 +1062,7 @@ fn run_update() {
             }
         }
         Err(_) => {
-            eprintln!(
-                "curl not found. Visit: https://github.com/anton-abyzov/ccx-rs/releases"
-            );
+            eprintln!("curl not found. Visit: https://github.com/anton-abyzov/ccx-rs/releases");
         }
     }
 }
@@ -1100,10 +1115,7 @@ fn build_hook_registry(settings: &ccx_config::Settings) -> ccx_core::HookRegistr
 fn resolve_model_alias(model: &str, provider: &str) -> (String, String) {
     match model.to_lowercase().as_str() {
         // DeepSeek R1 — reasoning model (free via OpenRouter)
-        "deepseek" | "deepseek-r1" | "r1" => (
-            "deepseek/deepseek-r1".into(),
-            "openrouter".into(),
-        ),
+        "deepseek" | "deepseek-r1" | "r1" => ("deepseek/deepseek-r1".into(), "openrouter".into()),
         // Nvidia Nemotron — fast coding model (free via OpenRouter)
         "nemotron" | "nvidia" | "nemotron-120b" => (
             "nvidia/nemotron-3-super-120b-a12b:free".into(),
@@ -1115,32 +1127,14 @@ fn resolve_model_alias(model: &str, provider: &str) -> (String, String) {
             "openrouter".into(),
         ),
         // Qwen — large context (1M) free model
-        "qwen" | "qwen3" => (
-            "qwen/qwen3-235b-a22b:free".into(),
-            "openrouter".into(),
-        ),
+        "qwen" | "qwen3" => ("qwen/qwen3-235b-a22b:free".into(), "openrouter".into()),
         // Claude aliases (keep as anthropic provider)
-        "sonnet" | "claude-sonnet" | "claude" => (
-            "claude-sonnet-4-6".into(),
-            "anthropic".into(),
-        ),
-        "opus" | "claude-opus" => (
-            "claude-opus-4-6".into(),
-            "anthropic".into(),
-        ),
-        "haiku" | "claude-haiku" => (
-            "claude-haiku-4-5".into(),
-            "anthropic".into(),
-        ),
+        "sonnet" | "claude-sonnet" | "claude" => ("claude-sonnet-4-6".into(), "anthropic".into()),
+        "opus" | "claude-opus" => ("claude-opus-4-6".into(), "anthropic".into()),
+        "haiku" | "claude-haiku" => ("claude-haiku-4-5".into(), "anthropic".into()),
         // OpenAI aliases
-        "gpt4o" | "gpt-4o" | "4o" => (
-            "gpt-4o".into(),
-            "openai".into(),
-        ),
-        "o1" | "o1-preview" => (
-            "o1".into(),
-            "openai".into(),
-        ),
+        "gpt4o" | "gpt-4o" | "4o" => ("gpt-4o".into(), "openai".into()),
+        "o1" | "o1-preview" => ("o1".into(), "openai".into()),
         // No alias — use as-is
         _ => (model.to_string(), provider.to_string()),
     }
@@ -1159,6 +1153,7 @@ fn effort_config(effort: &str) -> (u32, bool, u32) {
 /// User's choice from the interactive auth picker.
 #[derive(Debug, Clone, Copy)]
 enum AuthChoice {
+    ClaudeSubscription,
     AnthropicApiKey,
     OpenRouter,
     OpenAi,
@@ -1174,9 +1169,10 @@ fn render_picker(selected: usize) {
 
     let options: &[(&str, &str)] = &[
         (
-            "Anthropic API key",
-            "Enter key from console.anthropic.com",
+            "Claude subscription (Pro/Max/Team)",
+            "Opens browser — sign in — auto-connect",
         ),
+        ("Anthropic API key", "Enter key from console.anthropic.com"),
         (
             "OpenRouter (free models available)",
             "Enter key from openrouter.ai/keys",
@@ -1188,7 +1184,9 @@ fn render_picker(selected: usize) {
     println!();
     println!("{purple}╭──────────────────────────────────────────────────╮{reset}");
     println!("{purple}│{reset}                                                  {purple}│{reset}");
-    println!("{purple}│{reset}  {bold}Welcome to CCX!{reset}                                 {purple}│{reset}");
+    println!(
+        "{purple}│{reset}  {bold}Welcome to CCX!{reset}                                 {purple}│{reset}"
+    );
     println!("{purple}│{reset}                                                  {purple}│{reset}");
     println!("{purple}│{reset}  Select login method:                            {purple}│{reset}");
     println!("{purple}│{reset}                                                  {purple}│{reset}");
@@ -1205,21 +1203,17 @@ fn render_picker(selected: usize) {
             label.to_string()
         };
         // Option line
-        println!(
-            "{purple}│{reset}  {prefix}. {label_fmt:<42}{purple}│{reset}"
-        );
+        println!("{purple}│{reset}  {prefix}. {label_fmt:<42}{purple}│{reset}");
         // Hint line (dimmed)
+        println!("{purple}│{reset}       {dim}{hint:<43}{reset}{purple}│{reset}");
         println!(
-            "{purple}│{reset}       {dim}{hint:<43}{reset}{purple}│{reset}"
+            "{purple}│{reset}                                                  {purple}│{reset}"
         );
-        println!("{purple}│{reset}                                                  {purple}│{reset}");
     }
 
     println!("{purple}╰──────────────────────────────────────────────────╯{reset}");
     println!();
-    println!(
-        "{dim}  ↑/↓ to navigate  •  Enter to select  •  Esc to quit{reset}"
-    );
+    println!("{dim}  ↑/↓ to navigate  •  Enter to select  •  Esc to quit{reset}");
     std::io::stdout().flush().ok();
 }
 
@@ -1230,7 +1224,7 @@ fn interactive_auth_picker() -> Option<AuthChoice> {
     use crossterm::terminal;
 
     let mut selected: usize = 0;
-    let num_options = 3;
+    let num_options = 4;
 
     terminal::enable_raw_mode().ok()?;
     render_picker(selected);
@@ -1262,6 +1256,10 @@ fn interactive_auth_picker() -> Option<AuthChoice> {
                     selected = 2;
                     break Some(selected);
                 }
+                KeyCode::Char('4') => {
+                    selected = 3;
+                    break Some(selected);
+                }
                 KeyCode::Enter => break Some(selected),
                 KeyCode::Esc | KeyCode::Char('q') => break None,
                 _ => {}
@@ -1275,9 +1273,10 @@ fn interactive_auth_picker() -> Option<AuthChoice> {
     std::io::stdout().flush().ok();
 
     result.map(|idx| match idx {
-        0 => AuthChoice::AnthropicApiKey,
-        1 => AuthChoice::OpenRouter,
-        2 => AuthChoice::OpenAi,
+        0 => AuthChoice::ClaudeSubscription,
+        1 => AuthChoice::AnthropicApiKey,
+        2 => AuthChoice::OpenRouter,
+        3 => AuthChoice::OpenAi,
         _ => unreachable!(),
     })
 }
@@ -1292,16 +1291,33 @@ fn print_auth_guide_noninteractive() {
     println!();
     println!("{purple}╭──────────────────────────────────────────────────╮{reset}");
     println!("{purple}│{reset}                                                  {purple}│{reset}");
-    println!("{purple}│{reset}  {bold}Welcome to CCX!{reset}                                 {purple}│{reset}");
+    println!(
+        "{purple}│{reset}  {bold}Welcome to CCX!{reset}                                 {purple}│{reset}"
+    );
     println!("{purple}│{reset}                                                  {purple}│{reset}");
     println!("{purple}│{reset}  No credentials found. Options:                  {purple}│{reset}");
     println!("{purple}│{reset}                                                  {purple}│{reset}");
-    println!("{purple}│{reset}  {purple}1.{reset} {bold}Anthropic API key{reset}                           {purple}│{reset}");
-    println!("{purple}│{reset}       export ANTHROPIC_API_KEY=\"sk-ant-...\"      {purple}│{reset}");
-    println!("{purple}│{reset}  {purple}2.{reset} {bold}OpenRouter{reset} — openrouter.ai/keys              {purple}│{reset}");
-    println!("{purple}│{reset}       export OPENROUTER_API_KEY=\"sk-or-...\"      {purple}│{reset}");
-    println!("{purple}│{reset}  {purple}3.{reset} {bold}OpenAI{reset} — platform.openai.com/api-keys        {purple}│{reset}");
-    println!("{purple}│{reset}       export OPENAI_API_KEY=\"sk-...\"             {purple}│{reset}");
+    println!(
+        "{purple}│{reset}  {purple}1.{reset} {bold}Claude subscription{reset} — run: ccx /login        {purple}│{reset}"
+    );
+    println!(
+        "{purple}│{reset}  {purple}2.{reset} {bold}Anthropic API key{reset}                           {purple}│{reset}"
+    );
+    println!(
+        "{purple}│{reset}       export ANTHROPIC_API_KEY=\"sk-ant-...\"      {purple}│{reset}"
+    );
+    println!(
+        "{purple}│{reset}  {purple}3.{reset} {bold}OpenRouter{reset} — openrouter.ai/keys              {purple}│{reset}"
+    );
+    println!(
+        "{purple}│{reset}       export OPENROUTER_API_KEY=\"sk-or-...\"      {purple}│{reset}"
+    );
+    println!(
+        "{purple}│{reset}  {purple}4.{reset} {bold}OpenAI{reset} — platform.openai.com/api-keys        {purple}│{reset}"
+    );
+    println!(
+        "{purple}│{reset}       export OPENAI_API_KEY=\"sk-...\"             {purple}│{reset}"
+    );
     println!("{purple}│{reset}                                                  {purple}│{reset}");
     println!("{purple}╰──────────────────────────────────────────────────╯{reset}");
     println!();
@@ -1314,9 +1330,7 @@ fn prompt_for_api_key(provider_name: &str, url: &str) -> Option<String> {
     let reset = "\x1b[0m";
 
     println!();
-    println!(
-        "Get your API key at: {bold}{url}{reset}"
-    );
+    println!("Get your API key at: {bold}{url}{reset}");
     println!();
     print!("Enter API key: ");
     std::io::stdout().flush().ok();
@@ -1361,8 +1375,60 @@ async fn run_first_run_auth(
     let choice = interactive_auth_picker();
 
     match choice {
+        Some(AuthChoice::ClaudeSubscription) => {
+            println!("{dim}Starting browser login...{reset}");
+            match ccx_auth::oauth::login().await {
+                Ok(tokens) => {
+                    let email = ccx_auth::fetch_oauth_email(&tokens.access_token).await;
+                    if let Some(ref e) = email {
+                        println!("{green}✓ Logged in as {e}{reset}");
+                    } else {
+                        println!("{green}✓ Logged in successfully!{reset}");
+                    }
+                    let auth = ccx_auth::AuthMethod::OAuthToken {
+                        access_token: tokens.access_token.clone(),
+                        api_key: tokens.api_key.clone(),
+                        subscription_type: tokens
+                            .subscription_type
+                            .clone()
+                            .unwrap_or_else(|| "unknown".to_string()),
+                    };
+                    let client = ccx_api::ApiClient::Claude(ccx_api::ClaudeClient::with_auth(
+                        &auth, model,
+                    ));
+                    (
+                        client,
+                        auth.display_label().to_string(),
+                        email,
+                        false,
+                        tokens.access_token,
+                        "anthropic".to_string(),
+                    )
+                }
+                Err(e) => {
+                    eprintln!("\x1b[31mOAuth login failed: {e}\x1b[0m");
+                    eprintln!(
+                        "{dim}Starting without authentication — type /login to retry.{reset}"
+                    );
+                    let auth = ccx_auth::AuthMethod::None;
+                    let client = ccx_api::ApiClient::Claude(ccx_api::ClaudeClient::with_auth(
+                        &auth, model,
+                    ));
+                    (
+                        client,
+                        auth.display_label().to_string(),
+                        None,
+                        true,
+                        String::new(),
+                        "anthropic".to_string(),
+                    )
+                }
+            }
+        }
         Some(AuthChoice::AnthropicApiKey) => {
-            if let Some(key) = prompt_for_api_key("Anthropic", "https://console.anthropic.com/settings/keys") {
+            if let Some(key) =
+                prompt_for_api_key("Anthropic", "https://console.anthropic.com/settings/keys")
+            {
                 println!("{dim}Validating...{reset}");
                 match ccx_auth::validate_api_key("anthropic", &key).await {
                     Ok(()) => {
@@ -1374,29 +1440,53 @@ async fn run_first_run_auth(
                         unsafe { std::env::set_var("ANTHROPIC_API_KEY", &key) };
                         let auth = ccx_auth::AuthMethod::ApiKey(ccx_auth::ResolvedKey {
                             key: key.clone(),
-                            source: ccx_auth::KeySource::ConfigFile(ccx_auth::ccx_config_path().unwrap()),
+                            source: ccx_auth::KeySource::ConfigFile(
+                                ccx_auth::ccx_config_path().unwrap(),
+                            ),
                         });
-                        let client = ccx_api::ApiClient::Claude(
-                            ccx_api::ClaudeClient::with_auth(&auth, model),
-                        );
-                        (client, "API Key".to_string(), None, false, key, "anthropic".to_string())
+                        let client = ccx_api::ApiClient::Claude(ccx_api::ClaudeClient::with_auth(
+                            &auth, model,
+                        ));
+                        (
+                            client,
+                            "API Key".to_string(),
+                            None,
+                            false,
+                            key,
+                            "anthropic".to_string(),
+                        )
                     }
                     Err(e) => {
                         eprintln!("\x1b[31mValidation failed: {e}\x1b[0m");
-                        eprintln!("{dim}Starting without authentication — type /login to retry.{reset}");
-                        let auth = ccx_auth::AuthMethod::None;
-                        let client = ccx_api::ApiClient::Claude(
-                            ccx_api::ClaudeClient::with_auth(&auth, model),
+                        eprintln!(
+                            "{dim}Starting without authentication — type /login to retry.{reset}"
                         );
-                        (client, auth.display_label().to_string(), None, true, String::new(), "anthropic".to_string())
+                        let auth = ccx_auth::AuthMethod::None;
+                        let client = ccx_api::ApiClient::Claude(ccx_api::ClaudeClient::with_auth(
+                            &auth, model,
+                        ));
+                        (
+                            client,
+                            auth.display_label().to_string(),
+                            None,
+                            true,
+                            String::new(),
+                            "anthropic".to_string(),
+                        )
                     }
                 }
             } else {
                 let auth = ccx_auth::AuthMethod::None;
-                let client = ccx_api::ApiClient::Claude(
-                    ccx_api::ClaudeClient::with_auth(&auth, model),
-                );
-                (client, auth.display_label().to_string(), None, true, String::new(), "anthropic".to_string())
+                let client =
+                    ccx_api::ApiClient::Claude(ccx_api::ClaudeClient::with_auth(&auth, model));
+                (
+                    client,
+                    auth.display_label().to_string(),
+                    None,
+                    true,
+                    String::new(),
+                    "anthropic".to_string(),
+                )
             }
         }
         Some(AuthChoice::OpenRouter) => {
@@ -1409,31 +1499,54 @@ async fn run_first_run_auth(
                         }
                         println!("{green}✓ API key validated. Using OpenRouter provider.{reset}");
                         unsafe { std::env::set_var("OPENROUTER_API_KEY", &key) };
-                        let client = ccx_api::ApiClient::OpenAi(
-                            ccx_api::OpenAiClient::openrouter(&key, model),
-                        );
-                        (client, "OpenRouter".to_string(), None, false, key, "openrouter".to_string())
+                        let client = ccx_api::ApiClient::OpenAi(ccx_api::OpenAiClient::openrouter(
+                            &key, model,
+                        ));
+                        (
+                            client,
+                            "OpenRouter".to_string(),
+                            None,
+                            false,
+                            key,
+                            "openrouter".to_string(),
+                        )
                     }
                     Err(e) => {
                         eprintln!("\x1b[31mValidation failed: {e}\x1b[0m");
-                        eprintln!("{dim}Starting without authentication — type /login to retry.{reset}");
-                        let auth = ccx_auth::AuthMethod::None;
-                        let client = ccx_api::ApiClient::Claude(
-                            ccx_api::ClaudeClient::with_auth(&auth, model),
+                        eprintln!(
+                            "{dim}Starting without authentication — type /login to retry.{reset}"
                         );
-                        (client, auth.display_label().to_string(), None, true, String::new(), "anthropic".to_string())
+                        let auth = ccx_auth::AuthMethod::None;
+                        let client = ccx_api::ApiClient::Claude(ccx_api::ClaudeClient::with_auth(
+                            &auth, model,
+                        ));
+                        (
+                            client,
+                            auth.display_label().to_string(),
+                            None,
+                            true,
+                            String::new(),
+                            "anthropic".to_string(),
+                        )
                     }
                 }
             } else {
                 let auth = ccx_auth::AuthMethod::None;
-                let client = ccx_api::ApiClient::Claude(
-                    ccx_api::ClaudeClient::with_auth(&auth, model),
-                );
-                (client, auth.display_label().to_string(), None, true, String::new(), "anthropic".to_string())
+                let client =
+                    ccx_api::ApiClient::Claude(ccx_api::ClaudeClient::with_auth(&auth, model));
+                (
+                    client,
+                    auth.display_label().to_string(),
+                    None,
+                    true,
+                    String::new(),
+                    "anthropic".to_string(),
+                )
             }
         }
         Some(AuthChoice::OpenAi) => {
-            if let Some(key) = prompt_for_api_key("OpenAI", "https://platform.openai.com/api-keys") {
+            if let Some(key) = prompt_for_api_key("OpenAI", "https://platform.openai.com/api-keys")
+            {
                 println!("{dim}Validating...{reset}");
                 match ccx_auth::validate_api_key("openai", &key).await {
                     Ok(()) => {
@@ -1442,27 +1555,48 @@ async fn run_first_run_auth(
                         }
                         println!("{green}✓ API key validated. Using OpenAI provider.{reset}");
                         unsafe { std::env::set_var("OPENAI_API_KEY", &key) };
-                        let client = ccx_api::ApiClient::OpenAi(
-                            ccx_api::OpenAiClient::openai(&key, model),
-                        );
-                        (client, "OpenAI".to_string(), None, false, key, "openai".to_string())
+                        let client =
+                            ccx_api::ApiClient::OpenAi(ccx_api::OpenAiClient::openai(&key, model));
+                        (
+                            client,
+                            "OpenAI".to_string(),
+                            None,
+                            false,
+                            key,
+                            "openai".to_string(),
+                        )
                     }
                     Err(e) => {
                         eprintln!("\x1b[31mValidation failed: {e}\x1b[0m");
-                        eprintln!("{dim}Starting without authentication — type /login to retry.{reset}");
-                        let auth = ccx_auth::AuthMethod::None;
-                        let client = ccx_api::ApiClient::Claude(
-                            ccx_api::ClaudeClient::with_auth(&auth, model),
+                        eprintln!(
+                            "{dim}Starting without authentication — type /login to retry.{reset}"
                         );
-                        (client, auth.display_label().to_string(), None, true, String::new(), "anthropic".to_string())
+                        let auth = ccx_auth::AuthMethod::None;
+                        let client = ccx_api::ApiClient::Claude(ccx_api::ClaudeClient::with_auth(
+                            &auth, model,
+                        ));
+                        (
+                            client,
+                            auth.display_label().to_string(),
+                            None,
+                            true,
+                            String::new(),
+                            "anthropic".to_string(),
+                        )
                     }
                 }
             } else {
                 let auth = ccx_auth::AuthMethod::None;
-                let client = ccx_api::ApiClient::Claude(
-                    ccx_api::ClaudeClient::with_auth(&auth, model),
-                );
-                (client, auth.display_label().to_string(), None, true, String::new(), "anthropic".to_string())
+                let client =
+                    ccx_api::ApiClient::Claude(ccx_api::ClaudeClient::with_auth(&auth, model));
+                (
+                    client,
+                    auth.display_label().to_string(),
+                    None,
+                    true,
+                    String::new(),
+                    "anthropic".to_string(),
+                )
             }
         }
         None => {
@@ -1550,8 +1684,7 @@ async fn run_chat(
             let key = openrouter_key.or(or_key_env.as_deref()).ok_or(
                 "OpenRouter API key required: set OPENROUTER_API_KEY or use --openrouter-key",
             )?;
-            let client =
-                ccx_api::ApiClient::OpenAi(ccx_api::OpenAiClient::openrouter(key, model));
+            let client = ccx_api::ApiClient::OpenAi(ccx_api::OpenAiClient::openrouter(key, model));
             (
                 client,
                 "OpenRouter".to_string(),
@@ -1562,11 +1695,10 @@ async fn run_chat(
             )
         }
         "openai" => {
-            let key = oi_key_env.as_deref().ok_or(
-                "OpenAI API key required: set OPENAI_API_KEY or CCX_OPENAI_KEY",
-            )?;
-            let client =
-                ccx_api::ApiClient::OpenAi(ccx_api::OpenAiClient::openai(key, model));
+            let key = oi_key_env
+                .as_deref()
+                .ok_or("OpenAI API key required: set OPENAI_API_KEY or CCX_OPENAI_KEY")?;
+            let client = ccx_api::ApiClient::OpenAi(ccx_api::OpenAiClient::openai(key, model));
             (
                 client,
                 "OpenAI".to_string(),
@@ -1594,9 +1726,8 @@ async fn run_chat(
                         } => api_key.clone().unwrap_or_else(|| access_token.clone()),
                         ccx_auth::AuthMethod::None => String::new(),
                     };
-                    let client = ccx_api::ApiClient::Claude(
-                        ccx_api::ClaudeClient::with_auth(&auth, model),
-                    );
+                    let client =
+                        ccx_api::ApiClient::Claude(ccx_api::ClaudeClient::with_auth(&auth, model));
                     let auth_source = auth.display_label().to_string();
                     (
                         client,
@@ -1627,9 +1758,9 @@ async fn run_chat(
                         }
                     } else if let Some(ref oi_key) = oi_key_env {
                         if !oi_key.is_empty() {
-                            let client = ccx_api::ApiClient::OpenAi(
-                                ccx_api::OpenAiClient::openai(oi_key, model),
-                            );
+                            let client = ccx_api::ApiClient::OpenAi(ccx_api::OpenAiClient::openai(
+                                oi_key, model,
+                            ));
                             (
                                 client,
                                 "OpenAI (auto-detected)".to_string(),
@@ -2051,7 +2182,9 @@ async fn run_tui_mode(
                     agent.pop_last_message();
                     let _ = tui_tx.send(ccx_tui::TuiEvent::NewMessage(ccx_tui::ChatMessage {
                         role: ccx_tui::ChatRole::Tool,
-                        content: "\u{26a1} Rate limited. Auto-switching to OpenRouter (nemotron)...".into(),
+                        content:
+                            "\u{26a1} Rate limited. Auto-switching to OpenRouter (nemotron)..."
+                                .into(),
                     }));
                     let mut cb2 = TuiCallback { tx: tui_tx.clone() };
                     if let Err(e) = agent.send_message(&user_input, &mut cb2).await {
@@ -2249,7 +2382,12 @@ struct InlineCallback {
 }
 
 impl InlineCallback {
-    fn new(bypass_permissions: bool, auth_source: &str, show_thinking: bool, email: Option<&str>) -> Self {
+    fn new(
+        bypass_permissions: bool,
+        auth_source: &str,
+        show_thinking: bool,
+        email: Option<&str>,
+    ) -> Self {
         Self {
             text_buffer: String::new(),
             spinner_shown: false,
@@ -2342,9 +2480,7 @@ impl ccx_core::AgentCallback for InlineCallback {
             ""
         };
         let delay_secs = delay_ms as f64 / 1000.0;
-        ccx_tui::inline::render_error(&format!(
-            "Rate limited ({account})"
-        ));
+        ccx_tui::inline::render_error(&format!("Rate limited ({account})"));
         ccx_tui::inline::render_error(&format!(
             "  {hint}Retrying in {delay_secs:.0}s... (attempt {attempt}/5)"
         ));
@@ -2391,7 +2527,14 @@ async fn run_inline_mode(
     let tool_count = tool_names.len();
     let mut current_model = model.to_string();
     let current_effort = effort.to_string();
-    ccx_tui::inline::render_welcome_with_provider(&current_model, auth_source, cwd_display, tool_count, email, effective_provider);
+    ccx_tui::inline::render_welcome_with_provider(
+        &current_model,
+        auth_source,
+        cwd_display,
+        tool_count,
+        email,
+        effective_provider,
+    );
     ccx_tui::inline::render_footer_line_with_effort(&current_model, &current_effort);
     println!();
 
@@ -2434,22 +2577,24 @@ async fn run_inline_mode(
     // Handle --continue flag.
     if continue_session {
         match sessions::find_latest_for_cwd(&cwd_str, effective_provider) {
-            Some(meta) => match sessions::load_session_messages(&cwd_str, effective_provider, &meta.id) {
-                Ok(messages) if !messages.is_empty() => {
-                    let count = messages.len();
-                    agent.set_messages(messages);
-                    session_id = meta.id.clone();
-                    session_turns = meta.turns;
-                    first_preview = meta.preview.clone();
-                    let short_id = &session_id[..session_id.len().min(8)];
-                    println!(
-                        "\x1b[32m\u{21bb} Resuming session {short_id} ({} turns, {count} messages)\x1b[0m",
-                        session_turns
-                    );
+            Some(meta) => {
+                match sessions::load_session_messages(&cwd_str, effective_provider, &meta.id) {
+                    Ok(messages) if !messages.is_empty() => {
+                        let count = messages.len();
+                        agent.set_messages(messages);
+                        session_id = meta.id.clone();
+                        session_turns = meta.turns;
+                        first_preview = meta.preview.clone();
+                        let short_id = &session_id[..session_id.len().min(8)];
+                        println!(
+                            "\x1b[32m\u{21bb} Resuming session {short_id} ({} turns, {count} messages)\x1b[0m",
+                            session_turns
+                        );
+                    }
+                    Ok(_) => println!("\x1b[33mLatest session has no messages.\x1b[0m"),
+                    Err(e) => println!("\x1b[31mFailed to load session: {e}\x1b[0m"),
                 }
-                Ok(_) => println!("\x1b[33mLatest session has no messages.\x1b[0m"),
-                Err(e) => println!("\x1b[31mFailed to load session: {e}\x1b[0m"),
-            },
+            }
             None => println!("\x1b[90mNo previous session found for this directory.\x1b[0m"),
         }
     } else if let Some(id) = resume_id {
@@ -2533,7 +2678,8 @@ async fn run_inline_mode(
                         }
                         "/model" => {
                             if let Some(new_model) = cmd_args {
-                                let (resolved, _) = resolve_model_alias(new_model, effective_provider);
+                                let (resolved, _) =
+                                    resolve_model_alias(new_model, effective_provider);
                                 agent.set_model(&resolved);
                                 current_model = resolved.clone();
                                 println!("\x1b[32mModel changed to {}\x1b[0m", resolved);
@@ -2605,18 +2751,42 @@ async fn run_inline_mode(
                             true
                         }
                         "/login" => {
-                            println!("Set up authentication with an API key:");
-                            println!();
-                            println!("  Anthropic:   export ANTHROPIC_API_KEY=\"sk-ant-...\"");
-                            println!("               Get key: https://console.anthropic.com/settings/keys");
-                            println!();
-                            println!("  OpenRouter:  export OPENROUTER_API_KEY=\"sk-or-...\"");
-                            println!("               Get key: https://openrouter.ai/keys");
-                            println!();
-                            println!("  OpenAI:      export OPENAI_API_KEY=\"sk-...\"");
-                            println!("               Get key: https://platform.openai.com/api-keys");
-                            println!();
-                            println!("After setting the key, restart ccx or run `ccx chat`.");
+                            let login_result = if claude_cli_available() {
+                                println!("Launching Claude auth...");
+                                run_claude_cli_login().map(|_| ccx_auth::oauth::OAuthTokens {
+                                    access_token: String::new(),
+                                    refresh_token: None,
+                                    api_key: None,
+                                    subscription_type: None,
+                                })
+                            } else {
+                                ccx_auth::oauth::login().await
+                            };
+
+                            match login_result {
+                                Ok(_) => {
+                                    println!("\x1b[32mLogin successful!\x1b[0m");
+                                    // Re-check auth after login.
+                                    if let Ok(auth) = ccx_auth::resolve_auth(None) {
+                                        let auth = hydrate_runtime_oauth(auth).await;
+                                        if !auth.is_none() {
+                                            no_auth = false;
+                                            let new_client = ccx_api::ApiClient::Claude(
+                                                ccx_api::ClaudeClient::with_auth(
+                                                    &auth,
+                                                    agent.model(),
+                                                ),
+                                            );
+                                            agent.set_client(new_client);
+                                            println!(
+                                                "\x1b[32mAuthenticated as {}. You can start chatting.\x1b[0m",
+                                                auth.display_label()
+                                            );
+                                        }
+                                    }
+                                }
+                                Err(e) => println!("\x1b[31mLogin failed: {e}\x1b[0m"),
+                            }
                             true
                         }
                         "/tools" => {
@@ -2626,10 +2796,18 @@ async fn run_inline_mode(
                         }
                         "/resume" => {
                             if let Some(sid) = cmd_args {
-                                match sessions::load_session_messages(&cwd_str, effective_provider, sid) {
+                                match sessions::load_session_messages(
+                                    &cwd_str,
+                                    effective_provider,
+                                    sid,
+                                ) {
                                     Ok(messages) if !messages.is_empty() => {
                                         let count = messages.len();
-                                        let meta = sessions::find_session_meta(&cwd_str, effective_provider, sid);
+                                        let meta = sessions::find_session_meta(
+                                            &cwd_str,
+                                            effective_provider,
+                                            sid,
+                                        );
                                         let turns = meta.as_ref().map(|m| m.turns).unwrap_or(0);
                                         first_preview = meta
                                             .as_ref()
@@ -2649,7 +2827,10 @@ async fn run_inline_mode(
                                     Err(e) => println!("\x1b[31m{e}\x1b[0m"),
                                 }
                             } else {
-                                let all = sessions::list_sessions_for_project(&cwd_str, effective_provider);
+                                let all = sessions::list_sessions_for_project(
+                                    &cwd_str,
+                                    effective_provider,
+                                );
                                 if all.is_empty() {
                                     println!("\x1b[90mNo saved sessions.\x1b[0m");
                                 } else {
@@ -2672,7 +2853,11 @@ async fn run_inline_mode(
                         "/continue" => {
                             match sessions::find_latest_for_cwd(&cwd_str, effective_provider) {
                                 Some(meta) => {
-                                    match sessions::load_session_messages(&cwd_str, effective_provider, &meta.id) {
+                                    match sessions::load_session_messages(
+                                        &cwd_str,
+                                        effective_provider,
+                                        &meta.id,
+                                    ) {
                                         Ok(messages) if !messages.is_empty() => {
                                             let count = messages.len();
                                             agent.set_messages(messages);
@@ -2787,7 +2972,8 @@ async fn run_inline_mode(
                             true
                         }
                         "/sessions" => {
-                            let all = sessions::list_sessions_for_project(&cwd_str, effective_provider);
+                            let all =
+                                sessions::list_sessions_for_project(&cwd_str, effective_provider);
                             if all.is_empty() {
                                 println!("\x1b[90mNo saved sessions for this directory.\x1b[0m");
                             } else {
@@ -2909,14 +3095,14 @@ async fn run_inline_mode(
 
                             // User plugins
                             if user_plugins.exists() {
-                                for entry in
-                                    std::fs::read_dir(&user_plugins).into_iter().flatten().flatten()
+                                for entry in std::fs::read_dir(&user_plugins)
+                                    .into_iter()
+                                    .flatten()
+                                    .flatten()
                                 {
-                                    if entry.path().is_dir()
-                                        && entry.file_name() != "marketplaces"
+                                    if entry.path().is_dir() && entry.file_name() != "marketplaces"
                                     {
-                                        let name =
-                                            entry.file_name().to_string_lossy().to_string();
+                                        let name = entry.file_name().to_string_lossy().to_string();
                                         println!(
                                             "  {P_ACCENT}{name}{P_RESET} {P_DIM}(user){P_RESET}"
                                         );
@@ -2933,8 +3119,7 @@ async fn run_inline_mode(
                                     .flatten()
                                 {
                                     if entry.path().is_dir() {
-                                        let name =
-                                            entry.file_name().to_string_lossy().to_string();
+                                        let name = entry.file_name().to_string_lossy().to_string();
                                         println!(
                                             "  {P_ACCENT}{name}{P_RESET} {P_DIM}(project){P_RESET}"
                                         );
@@ -2945,12 +3130,13 @@ async fn run_inline_mode(
 
                             // Marketplace plugins
                             if marketplace.exists() {
-                                for mp in
-                                    std::fs::read_dir(&marketplace).into_iter().flatten().flatten()
+                                for mp in std::fs::read_dir(&marketplace)
+                                    .into_iter()
+                                    .flatten()
+                                    .flatten()
                                 {
                                     if mp.path().is_dir() {
-                                        let mp_name =
-                                            mp.file_name().to_string_lossy().to_string();
+                                        let mp_name = mp.file_name().to_string_lossy().to_string();
                                         let plugins_dir = mp.path().join("plugins");
                                         if plugins_dir.exists() {
                                             for entry in std::fs::read_dir(&plugins_dir)
@@ -2991,10 +3177,8 @@ async fn run_inline_mode(
                                             .flatten()
                                         {
                                             if entry.path().is_dir() {
-                                                let name = entry
-                                                    .file_name()
-                                                    .to_string_lossy()
-                                                    .to_string();
+                                                let name =
+                                                    entry.file_name().to_string_lossy().to_string();
                                                 if seen.insert(name.clone()) {
                                                     println!(
                                                         "  {P_ACCENT}{name}{P_RESET} {P_DIM}(specweave){P_RESET}"
@@ -3029,7 +3213,9 @@ async fn run_inline_mode(
                                     );
                                 }
                             } else {
-                                println!("  \x1b[90mNo .mcp.json found in current directory\x1b[0m");
+                                println!(
+                                    "  \x1b[90mNo .mcp.json found in current directory\x1b[0m"
+                                );
                             }
                             let global_mcp = dirs::home_dir().unwrap().join(".claude/mcp.json");
                             if global_mcp.exists() {
@@ -3050,7 +3236,10 @@ async fn run_inline_mode(
                                 ("OPENAI_API_KEY", "OpenAI"),
                             ] {
                                 if let Ok(key) = std::env::var(var) {
-                                    println!("  \x1b[32m●\x1b[0m \x1b[1m{label}\x1b[0m ({var}): \x1b[90m{}\x1b[0m", mask_key(&key));
+                                    println!(
+                                        "  \x1b[32m●\x1b[0m \x1b[1m{label}\x1b[0m ({var}): \x1b[90m{}\x1b[0m",
+                                        mask_key(&key)
+                                    );
                                 }
                             }
                             println!("\n  \x1b[90mManage: ccx auth [status|login|logout]\x1b[0m");
@@ -3091,8 +3280,12 @@ async fn run_inline_mode(
                         ccx_tui::inline::clear_previous_line();
                         ccx_tui::inline::render_skill_invocation(&skill.name, skill_args);
 
-                        let mut cb =
-                            InlineCallback::new(bypass_permissions, auth_source, show_thinking, email);
+                        let mut cb = InlineCallback::new(
+                            bypass_permissions,
+                            auth_source,
+                            show_thinking,
+                            email,
+                        );
                         match agent.send_message(&user_msg, &mut cb).await {
                             Ok(_) => cb.finish_text(),
                             Err(ccx_core::AgentLoopError::RateLimitFallback) => {
@@ -3107,9 +3300,16 @@ async fn run_inline_mode(
                                 current_model = or_model.to_string();
                                 agent.pop_last_message();
                                 println!();
-                                println!("\x1b[38;2;138;99;210m\u{26a1} Rate limited. Auto-switching to OpenRouter (nemotron)...\x1b[0m");
+                                println!(
+                                    "\x1b[38;2;138;99;210m\u{26a1} Rate limited. Auto-switching to OpenRouter (nemotron)...\x1b[0m"
+                                );
                                 println!();
-                                let mut cb2 = InlineCallback::new(bypass_permissions, auth_source, show_thinking, email);
+                                let mut cb2 = InlineCallback::new(
+                                    bypass_permissions,
+                                    auth_source,
+                                    show_thinking,
+                                    email,
+                                );
                                 match agent.send_message(&user_msg, &mut cb2).await {
                                     Ok(_) => cb2.finish_text(),
                                     Err(e2) => {
@@ -3150,7 +3350,8 @@ async fn run_inline_mode(
                 ccx_tui::inline::clear_previous_line();
                 ccx_tui::inline::render_user_message(input);
 
-                let mut cb = InlineCallback::new(bypass_permissions, auth_source, show_thinking, email);
+                let mut cb =
+                    InlineCallback::new(bypass_permissions, auth_source, show_thinking, email);
                 match agent.send_message(input, &mut cb).await {
                     Ok(_) => cb.finish_text(),
                     Err(ccx_core::AgentLoopError::RateLimitFallback) => {
@@ -3166,9 +3367,16 @@ async fn run_inline_mode(
                         // Pop the user message pushed by the failed send_message
                         agent.pop_last_message();
                         println!();
-                        println!("\x1b[38;2;138;99;210m\u{26a1} Rate limited. Auto-switching to OpenRouter (nemotron)...\x1b[0m");
+                        println!(
+                            "\x1b[38;2;138;99;210m\u{26a1} Rate limited. Auto-switching to OpenRouter (nemotron)...\x1b[0m"
+                        );
                         println!();
-                        let mut cb2 = InlineCallback::new(bypass_permissions, auth_source, show_thinking, email);
+                        let mut cb2 = InlineCallback::new(
+                            bypass_permissions,
+                            auth_source,
+                            show_thinking,
+                            email,
+                        );
                         match agent.send_message(input, &mut cb2).await {
                             Ok(_) => cb2.finish_text(),
                             Err(e2) => {
@@ -3183,10 +3391,14 @@ async fn run_inline_mode(
                         ccx_tui::inline::render_error("Rate limit reached. Options:");
                         ccx_tui::inline::render_error("  1. Wait and retry (may take minutes)");
                         ccx_tui::inline::render_error("  2. Use a free model:");
-                        ccx_tui::inline::render_error("     export OPENROUTER_API_KEY=\"your-key-from-openrouter.ai/keys\"");
+                        ccx_tui::inline::render_error(
+                            "     export OPENROUTER_API_KEY=\"your-key-from-openrouter.ai/keys\"",
+                        );
                         ccx_tui::inline::render_error("     ccx --model nemotron");
                         ccx_tui::inline::render_error("  3. Use a different Anthropic API key:");
-                        ccx_tui::inline::render_error("     export ANTHROPIC_API_KEY=\"sk-ant-...\"");
+                        ccx_tui::inline::render_error(
+                            "     export ANTHROPIC_API_KEY=\"sk-ant-...\"",
+                        );
                     }
                     Err(e) => {
                         cb.finish_text();
@@ -3197,19 +3409,27 @@ async fn run_inline_mode(
                 session_turns += 1;
 
                 // Incremental session save after each turn.
-                let _ = sessions::save_session_messages(&cwd_str, effective_provider, &session_id, agent.messages());
-                let _ = sessions::save_session_meta(&sessions::SessionMeta {
-                    id: session_id.clone(),
-                    cwd: cwd_str.clone(),
-                    model: current_model.clone(),
-                    created: session_created,
-                    last_active: sessions::now_epoch(),
-                    preview: first_preview.clone(),
-                    name: None,
-                    turns: session_turns,
-                    total_tokens: agent.cost().total_input_tokens
-                        + agent.cost().total_output_tokens,
-                }, effective_provider);
+                let _ = sessions::save_session_messages(
+                    &cwd_str,
+                    effective_provider,
+                    &session_id,
+                    agent.messages(),
+                );
+                let _ = sessions::save_session_meta(
+                    &sessions::SessionMeta {
+                        id: session_id.clone(),
+                        cwd: cwd_str.clone(),
+                        model: current_model.clone(),
+                        created: session_created,
+                        last_active: sessions::now_epoch(),
+                        preview: first_preview.clone(),
+                        name: None,
+                        turns: session_turns,
+                        total_tokens: agent.cost().total_input_tokens
+                            + agent.cost().total_output_tokens,
+                    },
+                    effective_provider,
+                );
 
                 ccx_tui::inline::render_separator();
             }
@@ -3223,22 +3443,30 @@ async fn run_inline_mode(
 
     // Final session save and cleanup.
     if session_turns > 0 {
-        let _ = sessions::save_session_messages(&cwd_str, effective_provider, &session_id, agent.messages());
-        let _ = sessions::save_session_meta(&sessions::SessionMeta {
-            id: session_id.clone(),
-            cwd: cwd_str.clone(),
-            model: model.to_string(),
-            created: session_created,
-            last_active: sessions::now_epoch(),
-            preview: if first_preview.is_empty() {
-                "(no messages)".into()
-            } else {
-                first_preview
+        let _ = sessions::save_session_messages(
+            &cwd_str,
+            effective_provider,
+            &session_id,
+            agent.messages(),
+        );
+        let _ = sessions::save_session_meta(
+            &sessions::SessionMeta {
+                id: session_id.clone(),
+                cwd: cwd_str.clone(),
+                model: model.to_string(),
+                created: session_created,
+                last_active: sessions::now_epoch(),
+                preview: if first_preview.is_empty() {
+                    "(no messages)".into()
+                } else {
+                    first_preview
+                },
+                name: None,
+                turns: session_turns,
+                total_tokens: agent.cost().total_input_tokens + agent.cost().total_output_tokens,
             },
-            name: None,
-            turns: session_turns,
-            total_tokens: agent.cost().total_input_tokens + agent.cost().total_output_tokens,
-        }, effective_provider);
+            effective_provider,
+        );
         sessions::cleanup_sessions(&cwd_str, effective_provider, 100);
     }
 

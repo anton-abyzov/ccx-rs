@@ -9,7 +9,7 @@ pub enum AuthError {
     #[error("no API key found: set ANTHROPIC_API_KEY or add it to ~/.claude/config.json")]
     NoKeyFound,
 
-    #[error("no credentials found: set ANTHROPIC_API_KEY, OPENROUTER_API_KEY, or OPENAI_API_KEY")]
+    #[error("no credentials found: set ANTHROPIC_API_KEY or run ccx /login")]
     NoCredentials,
 
     #[error("config file error: {0}")]
@@ -42,8 +42,7 @@ pub struct ResolvedKey {
 pub enum AuthMethod {
     /// Traditional API key authentication.
     ApiKey(ResolvedKey),
-    /// OAuth token (deprecated — not for use with Claude subscriptions per Anthropic ToS).
-    #[deprecated(note = "OAuth tokens from Claude subscriptions may not be used in third-party tools per Anthropic ToS")]
+    /// OAuth token from Claude subscription (Max, Pro, Team).
     OAuthToken {
         access_token: String,
         api_key: Option<String>,
@@ -55,17 +54,22 @@ pub enum AuthMethod {
 
 impl AuthMethod {
     /// Human-readable label for the auth source (for welcome panel display).
-    #[allow(deprecated)]
     pub fn display_label(&self) -> &str {
         match self {
             AuthMethod::ApiKey(_) => "API Key",
-            AuthMethod::OAuthToken { .. } => "OAuth (deprecated)",
+            AuthMethod::OAuthToken {
+                subscription_type, ..
+            } => match subscription_type.as_str() {
+                "max" => "Claude Max",
+                "pro" => "Claude Pro",
+                "team" => "Claude Team",
+                _ => "Claude Subscription",
+            },
             AuthMethod::None => "Not authenticated",
         }
     }
 
     /// Returns the OAuth access token if this is an OAuth auth method.
-    #[allow(deprecated)]
     pub fn oauth_token(&self) -> Option<&str> {
         match self {
             AuthMethod::OAuthToken { access_token, .. } => Some(access_token),
@@ -102,13 +106,9 @@ pub async fn fetch_oauth_email(access_token: &str) -> Option<String> {
 /// Resolve authentication from all available sources, in priority order:
 /// 1. Explicit API key (if provided)
 /// 2. ANTHROPIC_API_KEY environment variable
-/// 3. API key from ~/.claude/config.json
-///
-/// NOTE: OAuth token reading from macOS Keychain and ~/.claude/.credentials.json
-/// has been removed. Per Anthropic's Terms of Service, OAuth tokens from Claude
-/// Free/Pro/Max subscriptions are intended exclusively for Claude Code and
-/// Claude.ai. Third-party tools must use API key authentication.
-/// See: https://code.claude.com/docs/en/legal-and-compliance
+/// 3. OAuth token from macOS Keychain
+/// 4. OAuth token from ~/.claude/.credentials.json
+/// 5. API key from ~/.claude/config.json
 pub fn resolve_auth(explicit: Option<&str>) -> Result<AuthMethod, AuthError> {
     // 1. Explicit key takes priority.
     if let Some(key) = explicit {
@@ -128,7 +128,19 @@ pub fn resolve_auth(explicit: Option<&str>) -> Result<AuthMethod, AuthError> {
         }));
     }
 
-    // 3. Config file API key (~/.claude/config.json).
+    // 3. macOS Keychain OAuth token.
+    if cfg!(target_os = "macos")
+        && let Some(oauth) = read_keychain_token()
+    {
+        return Ok(oauth);
+    }
+
+    // 4. Credentials file OAuth token.
+    if let Some(oauth) = read_credentials_file() {
+        return Ok(oauth);
+    }
+
+    // 5. Config file API key (~/.claude/config.json).
     if let Some(key) = read_key_from_config()? {
         let config_path = config_file_path().unwrap();
         return Ok(AuthMethod::ApiKey(ResolvedKey {
@@ -503,5 +515,16 @@ mod tests {
             }
             _ => panic!("expected OAuthToken"),
         }
+    }
+
+    #[test]
+    fn test_display_label_uses_subscription_type() {
+        let auth = AuthMethod::OAuthToken {
+            access_token: "oauth-token".into(),
+            api_key: None,
+            subscription_type: "max".into(),
+        };
+
+        assert_eq!(auth.display_label(), "Claude Max");
     }
 }
