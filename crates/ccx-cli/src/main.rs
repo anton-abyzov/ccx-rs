@@ -55,6 +55,30 @@ struct Cli {
     #[arg(short = 'p', long, global = true)]
     print: bool,
 
+    /// Provider: anthropic (default), openrouter, openai
+    #[arg(long, global = true)]
+    provider: Option<String>,
+
+    /// OpenRouter API key
+    #[arg(long, global = true)]
+    openrouter_key: Option<String>,
+
+    /// API key (overrides env var)
+    #[arg(long, global = true)]
+    api_key: Option<String>,
+
+    /// Continue most recent session
+    #[arg(short = 'c', long, global = true)]
+    r#continue: bool,
+
+    /// Resume a session by ID
+    #[arg(short = 'r', long, global = true)]
+    resume: Option<String>,
+
+    /// Skip all permission checks
+    #[arg(long, global = true)]
+    dangerously_skip_permissions: bool,
+
     /// Trailing arguments used as prompt in pipe mode
     #[arg(trailing_var_arg = true)]
     args: Vec<String>,
@@ -194,20 +218,20 @@ async fn main() {
 
         Commands::Chat {
             model: cli.model.unwrap_or_else(|| "claude-sonnet-4-6".into()),
-            api_key: None,
+            api_key: cli.api_key,
             prompt: if print_mode { prompt_from_args } else { None },
             permission_mode: "bypass".into(),
             max_turns: 200,
             tui: false,
-            dangerously_skip_permissions: false,
+            dangerously_skip_permissions: cli.dangerously_skip_permissions,
             no_thinking: false,
             thinking_budget: 10000,
             hide_thinking: false,
             sandbox: false,
-            provider: "anthropic".into(),
-            openrouter_key: None,
-            resume: None,
-            continue_session: false,
+            provider: cli.provider.unwrap_or_else(|| "anthropic".into()),
+            openrouter_key: cli.openrouter_key,
+            resume: cli.resume,
+            continue_session: cli.r#continue,
             effort: cli.effort.unwrap_or_else(|| "high".into()),
             system_prompt: cli.system_prompt,
             append_system_prompt: cli.append_system_prompt,
