@@ -265,6 +265,9 @@ async fn main() {
             max_budget_usd,
             print,
         } => {
+            // Model aliases — short names that auto-resolve provider + full model ID
+            let (model, provider) = resolve_model_alias(&model, &provider);
+
             if let Err(e) = run_chat(
                 &model,
                 api_key.as_deref(),
@@ -454,6 +457,57 @@ fn build_hook_registry(settings: &ccx_config::Settings) -> ccx_core::HookRegistr
         }
     }
     registry
+}
+
+/// Resolve model aliases to full model IDs + correct provider.
+/// Allows: `ccx --model deepseek`, `ccx --model nemotron`, `ccx --model gpt4o`, etc.
+fn resolve_model_alias(model: &str, provider: &str) -> (String, String) {
+    match model.to_lowercase().as_str() {
+        // DeepSeek R1 — reasoning model (free via OpenRouter)
+        "deepseek" | "deepseek-r1" | "r1" => (
+            "deepseek/deepseek-r1".into(),
+            "openrouter".into(),
+        ),
+        // Nvidia Nemotron — fast coding model (free via OpenRouter)
+        "nemotron" | "nvidia" | "nemotron-120b" => (
+            "nvidia/nemotron-3-super-120b-a12b:free".into(),
+            "openrouter".into(),
+        ),
+        // Nvidia Nemotron Nano — fastest free model
+        "nemotron-nano" | "nano" => (
+            "nvidia/nemotron-3-nano-30b-a3b:free".into(),
+            "openrouter".into(),
+        ),
+        // Qwen — large context (1M) free model
+        "qwen" | "qwen3" => (
+            "qwen/qwen3-235b-a22b:free".into(),
+            "openrouter".into(),
+        ),
+        // Claude aliases (keep as anthropic provider)
+        "sonnet" | "claude-sonnet" | "claude" => (
+            "claude-sonnet-4-6".into(),
+            "anthropic".into(),
+        ),
+        "opus" | "claude-opus" => (
+            "claude-opus-4-6".into(),
+            "anthropic".into(),
+        ),
+        "haiku" | "claude-haiku" => (
+            "claude-haiku-4-5".into(),
+            "anthropic".into(),
+        ),
+        // OpenAI aliases
+        "gpt4o" | "gpt-4o" | "4o" => (
+            "gpt-4o".into(),
+            "openai".into(),
+        ),
+        "o1" | "o1-preview" => (
+            "o1".into(),
+            "openai".into(),
+        ),
+        // No alias — use as-is
+        _ => (model.to_string(), provider.to_string()),
+    }
 }
 
 fn effort_config(effort: &str) -> (u32, bool, u32) {
