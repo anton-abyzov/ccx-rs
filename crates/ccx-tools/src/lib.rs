@@ -5,6 +5,7 @@ pub mod exit_plan_mode;
 pub mod file_edit;
 pub mod file_read;
 pub mod file_write;
+pub mod path_validation;
 pub mod glob_tool;
 pub mod grep;
 pub mod meta_helpers;

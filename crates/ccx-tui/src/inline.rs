@@ -141,6 +141,12 @@ pub fn render_welcome_with_provider(
     }
     left_lines.push(format!("  {DIM}{cwd}{RESET}"));
     left_lines.push(format!("  {DIM}Tools: {tools}{RESET}"));
+    left_lines.push(format!(
+        "  {DIM}\u{26a1} Permissions: bypassed{RESET}"
+    ));
+    left_lines.push(format!(
+        "  {DIM}(--permission-mode default for prompts){RESET}"
+    ));
     left_lines.push(String::new());
 
     // Right panel content (provider-aware tips).

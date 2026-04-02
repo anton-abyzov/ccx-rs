@@ -22,6 +22,9 @@ pub struct ToolContext {
     /// Model name for the current session.
     #[serde(default)]
     pub model: String,
+    /// Whether permission checks are bypassed (file path validation skipped).
+    #[serde(default)]
+    pub bypass_permissions: bool,
 }
 
 fn default_provider() -> String {
@@ -37,6 +40,7 @@ impl ToolContext {
             provider: "anthropic".to_string(),
             api_key: String::new(),
             model: String::new(),
+            bypass_permissions: false,
         }
     }
 

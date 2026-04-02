@@ -51,7 +51,7 @@ pub async fn login() -> Result<OAuthTokens, Box<dyn std::error::Error>> {
 
     // 5. Wait for the callback (single connection).
     let (mut stream, _) = listener.accept()?;
-    let code = extract_code_from_request(&mut stream)?;
+    let code = extract_code_from_request(&mut stream, &state)?;
 
     // Send success response to browser.
     let response = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n\
@@ -122,8 +122,10 @@ fn generate_state() -> String {
 }
 
 /// Extract the authorization code from the HTTP request on the callback.
+/// Validates the `state` parameter against the expected value to prevent CSRF attacks.
 fn extract_code_from_request(
     stream: &mut std::net::TcpStream,
+    expected_state: &str,
 ) -> Result<String, Box<dyn std::error::Error>> {
     let mut reader = BufReader::new(stream.try_clone()?);
     let mut request_line = String::new();
@@ -140,33 +142,36 @@ fn extract_code_from_request(
         .map(|(_, q)| q)
         .ok_or("No query parameters in callback")?;
 
-    for param in query.split('&') {
-        if let Some(("code", value)) = param.split_once('=') {
-            return Ok(urlencoding::decode(value)?.into_owned());
-        }
+    // Collect query params into a map for easier access.
+    let params: std::collections::HashMap<&str, &str> = query
+        .split('&')
+        .filter_map(|p| p.split_once('='))
+        .collect();
+
+    // Check for error parameter first.
+    if let Some(error) = params.get("error") {
+        let desc = params.get("error_description").unwrap_or(&"unknown error");
+        return Err(format!(
+            "OAuth error: {} - {}",
+            urlencoding::decode(error)?,
+            urlencoding::decode(desc)?
+        )
+        .into());
     }
 
-    // Check for error parameter.
-    for param in query.split('&') {
-        if let Some(("error", value)) = param.split_once('=') {
-            let desc = query
-                .split('&')
-                .find_map(|p| {
-                    p.split_once('=')
-                        .filter(|(k, _)| *k == "error_description")
-                        .map(|(_, v)| v)
-                })
-                .unwrap_or("unknown error");
-            return Err(format!(
-                "OAuth error: {} - {}",
-                urlencoding::decode(value)?,
-                urlencoding::decode(desc)?
-            )
-            .into());
-        }
+    // Validate state parameter to prevent CSRF attacks.
+    let received_state = params
+        .get("state")
+        .ok_or("Missing state parameter in OAuth callback")?;
+    if urlencoding::decode(received_state)? != expected_state {
+        return Err("OAuth state mismatch \u{2014} possible CSRF attack".into());
     }
 
-    Err("No authorization code in callback".into())
+    // Extract authorization code.
+    let code = params
+        .get("code")
+        .ok_or("No authorization code in callback")?;
+    Ok(urlencoding::decode(code)?.into_owned())
 }
 
 /// Save OAuth credentials to keychain (macOS) and credentials file.

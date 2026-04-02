@@ -133,6 +133,10 @@ enum Commands {
         #[arg(long)]
         sandbox: bool,
 
+        /// Skip loading project-level .mcp.json (global MCP configs still loaded)
+        #[arg(long)]
+        no_mcp: bool,
+
         /// Provider: anthropic (default), openrouter, openai
         #[arg(long, default_value = "anthropic")]
         provider: String,
@@ -247,6 +251,7 @@ async fn main() {
             thinking_budget: 10000,
             hide_thinking: false,
             sandbox: false,
+            no_mcp: false,
             provider: cli.provider.unwrap_or_else(|| "anthropic".into()),
             openrouter_key: cli.openrouter_key,
             resume: cli.resume,
@@ -273,6 +278,7 @@ async fn main() {
             thinking_budget,
             hide_thinking,
             sandbox,
+            no_mcp,
             provider,
             openrouter_key,
             resume,
@@ -299,6 +305,7 @@ async fn main() {
                 thinking_budget,
                 hide_thinking,
                 sandbox,
+                no_mcp,
                 &provider,
                 openrouter_key.as_deref(),
                 resume.as_deref(),
@@ -844,6 +851,7 @@ async fn run_chat(
     thinking_budget: u32,
     hide_thinking: bool,
     sandbox: bool,
+    no_mcp: bool,
     provider: &str,
     openrouter_key: Option<&str>,
     resume_id: Option<&str>,
@@ -1077,7 +1085,10 @@ async fn run_chat(
     let cwd = std::env::current_dir()?;
 
     // Wire MCP: load .mcp.json and register MCP server tools.
-    let _mcp_clients = if let Some(mcp_config) = mcp_bridge::load_mcp_config(&cwd) {
+    // --no-mcp skips project-level MCP configs entirely.
+    let _mcp_clients = if no_mcp {
+        Vec::new()
+    } else if let Some(mcp_config) = mcp_bridge::load_mcp_config(&cwd) {
         mcp_bridge::register_mcp_tools(&mcp_config, &mut registry).await
     } else {
         Vec::new()
@@ -1154,6 +1165,7 @@ async fn run_chat(
     if sandbox {
         ctx.sandboxed = true;
     }
+    ctx.bypass_permissions = bypass_permissions;
     // Pass provider, key, and model so sub-agents (Agent tool) inherit credentials.
     ctx.provider = effective_provider.clone();
     ctx.api_key = resolved_api_key;

@@ -5,6 +5,8 @@ use async_trait::async_trait;
 use ccx_core::{Tool, ToolContext, ToolError, ToolResult};
 use serde_json::json;
 
+use crate::path_validation::validate_path;
+
 pub struct FileEditTool;
 
 #[async_trait]
@@ -66,6 +68,12 @@ impl Tool for FileEditTool {
         }
 
         let path = Path::new(file_path);
+
+        // Path traversal protection (skipped in bypass mode).
+        if path.exists() {
+            validate_path(path, &_ctx.working_dir, _ctx.bypass_permissions)?;
+        }
+
         if !path.exists() {
             return Err(ToolError::Execution(format!("file not found: {file_path}")));
         }
@@ -162,7 +170,9 @@ mod tests {
     use super::*;
 
     fn test_ctx() -> ToolContext {
-        ToolContext::new(PathBuf::from("/tmp"))
+        let mut ctx = ToolContext::new(PathBuf::from("/tmp"));
+        ctx.bypass_permissions = true;
+        ctx
     }
 
     #[tokio::test]

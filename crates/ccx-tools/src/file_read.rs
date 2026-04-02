@@ -6,6 +6,8 @@ use base64::Engine;
 use ccx_core::{Tool, ToolContext, ToolError, ToolResult};
 use serde_json::json;
 
+use crate::path_validation::validate_path;
+
 /// Maximum bytes to scan for binary detection.
 const BINARY_CHECK_SIZE: usize = 8192;
 
@@ -68,6 +70,9 @@ impl Tool for FileReadTool {
                 "{file_path} is a directory, not a file. Use Bash with 'ls' to list directory contents."
             )));
         }
+
+        // Path traversal protection (skipped in bypass mode).
+        validate_path(path, &_ctx.working_dir, _ctx.bypass_permissions)?;
 
         // Check for image/PDF extensions before reading — return base64 for these.
         let ext = path
@@ -185,7 +190,9 @@ mod tests {
     use super::*;
 
     fn test_ctx() -> ToolContext {
-        ToolContext::new(PathBuf::from("/tmp"))
+        let mut ctx = ToolContext::new(PathBuf::from("/tmp"));
+        ctx.bypass_permissions = true;
+        ctx
     }
 
     #[tokio::test]

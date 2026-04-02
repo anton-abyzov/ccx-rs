@@ -16,8 +16,11 @@ impl Sandbox for LandlockSandbox {
             return Ok(vec!["bash".into(), "-c".into(), command.into()]);
         }
 
-        // Landlock is a stub — run unsandboxed for now.
-        // A real implementation would use the landlock syscalls.
+        // Landlock is not yet implemented — warn the user and run unsandboxed.
+        eprintln!(
+            "\x1b[33m\u{26a0} Sandbox not available on Linux (Landlock not implemented). \
+             Commands run unsandboxed.\x1b[0m"
+        );
         Ok(vec!["bash".into(), "-c".into(), command.into()])
     }
 

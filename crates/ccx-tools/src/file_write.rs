@@ -5,6 +5,8 @@ use async_trait::async_trait;
 use ccx_core::{Tool, ToolContext, ToolError, ToolResult};
 use serde_json::json;
 
+use crate::path_validation::validate_path;
+
 pub struct FileWriteTool;
 
 #[async_trait]
@@ -46,6 +48,17 @@ impl Tool for FileWriteTool {
             .as_str()
             .ok_or_else(|| ToolError::InvalidInput("content is required".into()))?;
 
+        let path = Path::new(file_path);
+
+        // Path traversal protection (skipped in bypass mode).
+        if path.exists() {
+            validate_path(path, &_ctx.working_dir, _ctx.bypass_permissions)?;
+        } else if let Some(parent) = path.parent() {
+            if parent.exists() {
+                validate_path(parent, &_ctx.working_dir, _ctx.bypass_permissions)?;
+            }
+        }
+
         if let Some(parent) = Path::new(file_path).parent() {
             fs::create_dir_all(parent)
                 .map_err(|e| ToolError::Execution(format!("failed to create dirs: {e}")))?;
@@ -75,7 +88,8 @@ mod tests {
         let path = dir.join("output.txt");
 
         let tool = FileWriteTool;
-        let ctx = ToolContext::new(PathBuf::from("/tmp"));
+        let mut ctx = ToolContext::new(PathBuf::from("/tmp"));
+        ctx.bypass_permissions = true;
         let result = tool
             .execute(
                 json!({"file_path": path.to_str().unwrap(), "content": "hello\nworld\n"}),
@@ -95,7 +109,8 @@ mod tests {
         let path = dir.join("file.txt");
 
         let tool = FileWriteTool;
-        let ctx = ToolContext::new(PathBuf::from("/tmp"));
+        let mut ctx = ToolContext::new(PathBuf::from("/tmp"));
+        ctx.bypass_permissions = true;
         let result = tool
             .execute(
                 json!({"file_path": path.to_str().unwrap(), "content": "test"}),

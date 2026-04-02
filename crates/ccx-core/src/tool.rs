@@ -23,6 +23,8 @@ pub enum ToolError {
     Io(#[from] std::io::Error),
     #[error("timeout after {0}ms")]
     Timeout(u64),
+    #[error("permission denied: {0}")]
+    PermissionDenied(String),
     #[error("tool not found: {0}")]
     NotFound(String),
     #[error("{0}")]
