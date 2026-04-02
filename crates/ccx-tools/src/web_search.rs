@@ -58,7 +58,7 @@ impl Tool for WebSearchTool {
 async fn brave_search(query: &str, api_key: &str) -> Result<ToolResult, ToolError> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
-        .user_agent("ccx/0.1 (Claude Code Rust)")
+        .user_agent("ccx/0.1 (Claude Code Extended)")
         .build()
         .map_err(|e| ToolError::Execution(format!("HTTP client error: {e}")))?;
 
@@ -117,7 +117,7 @@ async fn duckduckgo_search(query: &str) -> Result<ToolResult, ToolError> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
         .redirect(reqwest::redirect::Policy::limited(5))
-        .user_agent("ccx/0.1 (Claude Code Rust)")
+        .user_agent("ccx/0.1 (Claude Code Extended)")
         .build()
         .map_err(|e| ToolError::Execution(format!("HTTP client error: {e}")))?;
 

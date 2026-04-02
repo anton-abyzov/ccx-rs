@@ -3,7 +3,7 @@
 ## Strategy: Fork Codex Crates + Build Claude Layer
 
 OpenAI Codex (github.com/openai/codex) is Apache-2.0 with 80+ Rust crates.
-We reuse ~40 infrastructure crates and build ~15 Claude-specific crates.
+We reuse ~40 infrastructure crates and build ~15 CCX-specific crates.
 
 ## Phase 1: Fork and Adapt Codex Foundation (Week 1-4)
 
@@ -42,7 +42,7 @@ pub enum StreamEvent {
 - No OAuth needed (unlike Codex's ChatGPT auth)
 
 ### P1-04: Adapt TUI crate
-- Replace Codex's OpenAI-specific UI with Claude branding
+- Replace Codex's OpenAI-specific UI with CCX branding
 - Keep: Ratatui rendering, input handling, diff display
 - Add: permission dialog, tool output views, markdown rendering
 
@@ -115,7 +115,7 @@ pub enum StreamEvent {
 - Wrap Codex's sandboxing crate
 - Seatbelt profiles for macOS
 - Landlock rules for Linux
-- No sandbox on Windows (matches Claude Code behavior, document as known gap)
+- No sandbox on Windows (matches reference implementation behavior, document as known gap)
 
 ## Phase 6: Polish (Week 20-24)
 

@@ -3,7 +3,7 @@ name = "ccx-api"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Claude API client with streaming support"
+description = "Multi-provider API client with streaming support for ccx"
 
 [dependencies]
 ccx-auth = { path = "../ccx-auth" }

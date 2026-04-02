@@ -1,7 +1,7 @@
 //! Inline terminal rendering — prints styled text directly to stdout.
 //!
-//! Matches Claude Code's inline rendering: welcome panel, styled chat messages,
-//! tool execution display, and prompt — all scrolling naturally.
+//! Renders welcome panel, styled chat messages, tool execution display,
+//! and prompt — all scrolling naturally.
 
 use std::io::{self, Write};
 

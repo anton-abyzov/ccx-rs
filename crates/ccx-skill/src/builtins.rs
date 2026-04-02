@@ -1,7 +1,7 @@
 //! Built-in skills bundled directly in the binary.
 //!
-//! These mirror Claude Code's built-in slash-command skills that aren't
-//! loaded from disk — they're part of the binary itself.
+//! Built-in slash-command skills that aren't loaded from disk —
+//! they're part of the binary itself.
 
 use std::path::PathBuf;
 

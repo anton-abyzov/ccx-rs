@@ -19,7 +19,7 @@ pub const PANEL_BG: Color = Color::Reset;
 pub struct Theme;
 
 impl Theme {
-    /// User message prefix and text (cyan, like Claude Code's `❯`).
+    /// User message prefix and text (cyan `❯` prompt).
     pub fn user_message() -> Style {
         Style::default().fg(Color::Cyan)
     }

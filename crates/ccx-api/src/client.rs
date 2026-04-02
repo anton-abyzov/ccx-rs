@@ -10,7 +10,7 @@ use crate::types::{MessageRequest, StreamEvent};
 const API_BASE: &str = "https://api.anthropic.com/v1";
 const API_VERSION: &str = "2023-06-01";
 
-/// Claude API client for streaming message requests.
+/// Anthropic Messages API client for streaming requests.
 pub struct ClaudeClient {
     http: reqwest::Client,
     api_key: String,

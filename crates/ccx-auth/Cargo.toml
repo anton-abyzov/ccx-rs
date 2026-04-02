@@ -3,7 +3,7 @@ name = "ccx-auth"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "API key resolution for Claude"
+description = "API key and OAuth resolution for ccx"
 
 [dependencies]
 serde = { workspace = true }

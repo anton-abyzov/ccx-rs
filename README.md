@@ -7,6 +7,8 @@
 **A custom AI coding assistant in a 4.7MB binary.** Free, open-source, multi-model. 19 tools, parallel execution, session persistence -- works with Claude, DeepSeek, Nemotron, or any of 200+ models via OpenRouter. No subscription required. Part of the [CCX (Community Code Extended)](https://github.com/anton-abyzov/ccx) project.
 
 > **CCX** = **C**ommunity **C**ode E**x**tended -- the open-source, multi-model AI coding assistant. Built by the community, for the community.
+>
+> **Disclaimer**: CCX is an independent, community-driven project. It is not affiliated with, endorsed by, or sponsored by Anthropic, PBC. "Claude" is a trademark of Anthropic. CCX uses the Anthropic API as one of several supported providers.
 
 ![CCX-RS Terminal UI](assets/screenshot.png)
 
@@ -76,22 +78,22 @@ Get a free key: [openrouter.ai/keys](https://openrouter.ai/keys)
 ccx chat --provider openrouter --model "deepseek/deepseek-r1"
 ```
 
-### With Claude Max/Pro (auto-detects subscription)
+### With Anthropic API key
 ```bash
-ccx chat   # reads token from macOS Keychain -- no API key needed
+export ANTHROPIC_API_KEY="sk-ant-..."  # from console.anthropic.com
+ccx chat
 ```
 
 ## Features
 
 - **19 tools** -- Bash, FileRead/Write/Edit, Glob, Grep, WebFetch, Agent (spawns sub-agents), TeamCreate, SendMessage, TaskCreate, and more
 - **Full TUI** -- welcome panel, styled `>` prompt, inline tool display
-- **Multi-model** -- Claude (API/subscription), OpenRouter (200+ models), Ollama (local)
+- **Multi-model** -- Anthropic (API key), OpenRouter (200+ models), OpenAI, Ollama (local)
 - **Tab autocomplete** -- slash commands + 50+ discovered skills
 - **MCP support** -- connect external tool servers via `.mcp.json`
 - **Session persistence** -- `/resume`, `/continue`, `--resume`, `--continue`
 - **Parallel tool execution** -- all tools in a turn run concurrently
 - **Thinking display** -- see DeepSeek R1's reasoning in real-time
-- **OAuth login** -- `/login` opens browser, no API key copy-paste
 - **Prompt caching** -- saves tokens on multi-turn conversations
 
 ## Demo
@@ -117,7 +119,7 @@ $ ccx chat --provider openrouter --model "nvidia/nemotron-3-super-120b-a12b:free
 |---------|-------------|
 | `/help` | Show all commands + discovered skills |
 | `/tools` | List all 19 tools |
-| `/login` | Authenticate via browser (OAuth) |
+| `/login` | Set up API key authentication |
 | `/cost` | Show token usage and cost |
 | `/resume` | Resume a previous session |
 | `/compact` | Compress conversation context |
@@ -133,8 +135,8 @@ Plus 50+ discovered skills via Tab completion.
 |-------|---------|
 | `ccx-cli` | CLI entry point |
 | `ccx-core` | Core agent loop |
-| `ccx-api` | Anthropic API client with streaming |
-| `ccx-auth` | API key + OAuth management |
+| `ccx-api` | Multi-provider API client with streaming |
+| `ccx-auth` | API key management |
 | `ccx-tools` | Tool interface + 11 implementations |
 | `ccx-permission` | Permission DSL and rules |
 | `ccx-compact` | Context compression |
