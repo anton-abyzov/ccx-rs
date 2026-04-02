@@ -2307,7 +2307,33 @@ async fn run_inline_mode(
                             true
                         }
                         "/login" => {
-                            match ccx_auth::oauth::login().await {
+                            // Delegate to `claude auth login` if available (handles the full
+                            // interactive OAuth flow with React/Ink UI). Falls back to our
+                            // paste-code flow if claude CLI is not installed.
+                            let claude_available = std::process::Command::new("claude")
+                                .arg("--version")
+                                .output()
+                                .map(|o| o.status.success())
+                                .unwrap_or(false);
+
+                            let login_result = if claude_available {
+                                println!("Launching Claude auth...");
+                                let status = std::process::Command::new("claude")
+                                    .args(["auth", "login"])
+                                    .status();
+                                match status {
+                                    Ok(s) if s.success() => Ok(ccx_auth::oauth::OAuthTokens {
+                                        access_token: String::new(), // will be read from keychain
+                                        refresh_token: None,
+                                    }),
+                                    Ok(_) => Err("Claude auth failed".into()),
+                                    Err(e) => Err(Box::new(e) as Box<dyn std::error::Error>),
+                                }
+                            } else {
+                                ccx_auth::oauth::login().await
+                            };
+
+                            match login_result {
                                 Ok(_) => {
                                     println!(
                                         "\x1b[32mLogin successful!\x1b[0m Restart ccx to use your subscription."
