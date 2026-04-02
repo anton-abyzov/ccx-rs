@@ -14,6 +14,22 @@ path_contains_dir() {
   esac
 }
 
+active_ccx_path() {
+  old_ifs=$IFS
+  IFS=:
+  set -- $PATH
+  IFS=$old_ifs
+
+  for dir do
+    [ -n "$dir" ] || continue
+    candidate="$dir/ccx"
+    if [ -f "$candidate" ]; then
+      printf '%s\n' "$candidate"
+      return
+    fi
+  done
+}
+
 choose_install_dir() {
   if [ -n "$CCX_INSTALL_DIR" ]; then
     printf '%s\n' "$CCX_INSTALL_DIR"
@@ -191,7 +207,9 @@ chmod +x "$TMP"
 mkdir -p "$INSTALL_DIR"
 mv "$TMP" "$INSTALL_DIR/ccx"
 
-if ! path_contains_dir "$INSTALL_DIR"; then
+ACTIVE_CCX="$(active_ccx_path)"
+
+if [ "$ACTIVE_CCX" != "$INSTALL_DIR/ccx" ]; then
   ensure_path_block
 fi
 
@@ -204,7 +222,7 @@ fi
 reconcile_existing_installs
 
 echo ""
-if ! path_contains_dir "$INSTALL_DIR"; then
+if [ "$ACTIVE_CCX" != "$INSTALL_DIR/ccx" ]; then
   echo "Run in this shell:"
   case "${SHELL:-}" in
     */fish)

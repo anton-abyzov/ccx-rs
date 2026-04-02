@@ -807,6 +807,10 @@ fn discover_ccx_binaries_on_path() -> Vec<std::path::PathBuf> {
     results
 }
 
+fn active_ccx_binary_on_path() -> Option<std::path::PathBuf> {
+    discover_ccx_binaries_on_path().into_iter().next()
+}
+
 fn read_ccx_version(path: &std::path::Path) -> Option<String> {
     let output = std::process::Command::new(path)
         .arg("--version")
@@ -969,8 +973,14 @@ fn run_update() {
                                     .unwrap_or_else(preferred_user_bin_dir);
                                 let install_moved = current_dir.as_ref() != Some(&install_dir);
                                 let path_env = std::env::var_os("PATH").unwrap_or_default();
+                                let install_target_key = install_target
+                                    .canonicalize()
+                                    .unwrap_or_else(|_| install_target.clone());
+                                let install_preferred = active_ccx_binary_on_path()
+                                    .map(|path| path.canonicalize().unwrap_or(path))
+                                    == Some(install_target_key);
 
-                                if install_moved {
+                                if install_moved || !install_preferred {
                                     match ensure_path_block(&install_dir) {
                                         Ok(Some(profile)) => {
                                             println!(
@@ -989,6 +999,7 @@ fn run_update() {
                                 println!("  Installed at: {}", install_target.display());
 
                                 if install_moved
+                                    || !install_preferred
                                     || !path_contains_dir(&path_env, &install_dir)
                                 {
                                     println!("\n\x1b[38;2;138;99;210mRun in this shell:\x1b[0m");
