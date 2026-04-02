@@ -14,10 +14,10 @@ pub struct ToolContext {
     #[serde(default)]
     pub env_vars: HashMap<String, String>,
     /// API provider: "anthropic" or "openrouter".
-    #[serde(default = "default_provider")]
+    #[serde(skip, default = "default_provider")]
     pub provider: String,
     /// API key for the current provider.
-    #[serde(default)]
+    #[serde(skip)]
     pub api_key: String,
     /// Model name for the current session.
     #[serde(default)]

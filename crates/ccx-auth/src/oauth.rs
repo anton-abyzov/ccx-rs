@@ -217,13 +217,27 @@ fn save_credentials(
             .output()?;
     }
 
-    // Also save to file as fallback.
+    // Also save to file as fallback (restricted permissions on Unix).
     let home = dirs::home_dir().ok_or("Cannot determine home directory")?;
     let creds_path = home.join(".claude/.credentials.json");
     if let Some(parent) = creds_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(&creds_path, &creds_str)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&creds_path)?
+            .write_all(creds_str.as_bytes())?;
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(&creds_path, &creds_str)?;
+    }
 
     Ok(())
 }

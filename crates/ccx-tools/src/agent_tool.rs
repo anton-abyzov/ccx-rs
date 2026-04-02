@@ -212,6 +212,7 @@ async fn run_process_agent(
 }
 
 /// Spawn the agent in a tmux pane for visual monitoring.
+/// Uses a wrapper script to avoid leaking the API key in `ps aux` output.
 async fn spawn_tmux_agent(
     ccx_bin: &str,
     prompt: &str,
@@ -221,32 +222,54 @@ async fn spawn_tmux_agent(
     ctx: &ToolContext,
     description: &str,
 ) -> Result<ToolResult, ToolError> {
-    // Escape single quotes in prompt for shell.
     let escaped_prompt = prompt.replace('\'', "'\\''");
-    let escaped_key = api_key.replace('\'', "'\\''");
-    let (env_var, provider_args) = match provider {
-        "openrouter" => (
-            format!("OPENROUTER_API_KEY='{escaped_key}'"),
-            " --provider openrouter".to_string(),
-        ),
-        "openai" => (
-            format!("OPENAI_API_KEY='{escaped_key}'"),
-            " --provider openai".to_string(),
-        ),
-        _ => (format!("ANTHROPIC_API_KEY='{escaped_key}'"), String::new()),
+    let (env_var_name, provider_args) = match provider {
+        "openrouter" => ("OPENROUTER_API_KEY", " --provider openrouter"),
+        "openai" => ("OPENAI_API_KEY", " --provider openai"),
+        _ => ("ANTHROPIC_API_KEY", ""),
     };
-    let cmd = format!(
-        "cd '{}' && {} '{}' chat --prompt '{}' --dangerously-skip-permissions --model '{}'{}",
-        ctx.working_dir.display(),
-        env_var,
-        ccx_bin,
-        escaped_prompt,
-        model,
-        provider_args
+
+    // Write a short-lived wrapper script so the API key never appears in the
+    // process command line (visible via `ps aux`).
+    let wrapper_id = std::process::id();
+    let wrapper_path = std::env::temp_dir().join(format!("ccx-agent-{wrapper_id}.sh"));
+    let wrapper = format!(
+        "#!/bin/sh\nexport {env_var_name}='{key}'\ncd '{cwd}' && exec '{bin}' chat --prompt '{prompt}' --dangerously-skip-permissions --model '{model}'{prov}\n",
+        key = api_key.replace('\'', "'\\''"),
+        cwd = ctx.working_dir.display(),
+        bin = ccx_bin,
+        prompt = escaped_prompt,
+        model = model,
+        prov = provider_args,
+    );
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o700)
+            .open(&wrapper_path)
+            .map_err(|e| ToolError::Execution(format!("failed to create wrapper script: {e}")))?;
+        f.write_all(wrapper.as_bytes())
+            .map_err(|e| ToolError::Execution(format!("failed to write wrapper script: {e}")))?;
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(&wrapper_path, &wrapper)
+            .map_err(|e| ToolError::Execution(format!("failed to create wrapper script: {e}")))?;
+    }
+
+    let tmux_cmd = format!(
+        "sh '{}' ; rm -f '{}'",
+        wrapper_path.display(),
+        wrapper_path.display()
     );
 
     let status = tokio::process::Command::new("tmux")
-        .args(["split-window", "-h", &cmd])
+        .args(["split-window", "-h", &tmux_cmd])
         .status()
         .await
         .map_err(|e| ToolError::Execution(format!("tmux split-window failed: {e}")))?;
@@ -257,6 +280,8 @@ async fn spawn_tmux_agent(
             is_error: false,
         })
     } else {
+        // Clean up wrapper on failure.
+        let _ = std::fs::remove_file(&wrapper_path);
         Err(ToolError::Execution("tmux split-window failed".into()))
     }
 }

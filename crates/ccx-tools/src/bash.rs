@@ -120,6 +120,8 @@ impl Tool for BashTool {
         }
 
         // Propagate common environment variables if set.
+        // NOTE: API keys (ANTHROPIC_API_KEY, OPENROUTER_API_KEY, OPENAI_API_KEY)
+        // are intentionally excluded to prevent credential leakage to child processes.
         for var in &[
             "LANG",
             "LC_ALL",
@@ -130,7 +132,6 @@ impl Tool for BashTool {
             "RUSTUP_HOME",
             "GOPATH",
             "NODE_PATH",
-            "ANTHROPIC_API_KEY",
         ] {
             if let Ok(val) = std::env::var(var) {
                 cmd.env(var, val);
