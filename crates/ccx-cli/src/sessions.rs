@@ -50,7 +50,10 @@ pub fn ccx_home() -> Option<PathBuf> {
 fn project_hash(path: &str) -> String {
     let mut hash: u64 = 0;
     for (i, b) in path.bytes().enumerate() {
-        hash = hash.wrapping_mul(31).wrapping_add(b as u64).wrapping_add(i as u64);
+        hash = hash
+            .wrapping_mul(31)
+            .wrapping_add(b as u64)
+            .wrapping_add(i as u64);
     }
     format!("{:016x}", hash)
 }
@@ -168,9 +171,7 @@ pub fn load_session_messages(
     let path = ccx_sessions_dir(provider, cwd)
         .map(|d| d.join(format!("{session_id}.jsonl")))
         .filter(|p| p.exists())
-        .or_else(|| {
-            legacy_sessions_dir(cwd).map(|d| d.join(format!("{session_id}.jsonl")))
-        })
+        .or_else(|| legacy_sessions_dir(cwd).map(|d| d.join(format!("{session_id}.jsonl"))))
         .ok_or(format!("session not found: {session_id}"))?;
     if !path.exists() {
         return Err(format!("session not found: {session_id}"));
@@ -225,14 +226,11 @@ pub fn list_sessions_for_project(cwd: &str, provider: &str) -> Vec<SessionMeta> 
     let mut sessions = Vec::new();
 
     // Collect from both new and legacy directories.
-    let dirs: Vec<PathBuf> = [
-        ccx_sessions_dir(provider, cwd),
-        legacy_sessions_dir(cwd),
-    ]
-    .into_iter()
-    .flatten()
-    .filter(|d| d.exists())
-    .collect();
+    let dirs: Vec<PathBuf> = [ccx_sessions_dir(provider, cwd), legacy_sessions_dir(cwd)]
+        .into_iter()
+        .flatten()
+        .filter(|d| d.exists())
+        .collect();
 
     for dir in dirs {
         if let Ok(entries) = fs::read_dir(&dir) {
@@ -243,9 +241,10 @@ pub fn list_sessions_for_project(cwd: &str, provider: &str) -> Vec<SessionMeta> 
                 }
                 if let Ok(content) = fs::read_to_string(&path)
                     && let Ok(meta) = serde_json::from_str::<SessionMeta>(&content)
-                        && seen_ids.insert(meta.id.clone()) {
-                            sessions.push(meta);
-                        }
+                    && seen_ids.insert(meta.id.clone())
+                {
+                    sessions.push(meta);
+                }
             }
         }
     }
@@ -270,14 +269,11 @@ pub fn cleanup_sessions(cwd: &str, provider: &str, max_sessions: usize) {
         return;
     }
     // Clean up from both new and legacy directories.
-    let dirs: Vec<PathBuf> = [
-        ccx_sessions_dir(provider, cwd),
-        legacy_sessions_dir(cwd),
-    ]
-    .into_iter()
-    .flatten()
-    .filter(|d| d.exists())
-    .collect();
+    let dirs: Vec<PathBuf> = [ccx_sessions_dir(provider, cwd), legacy_sessions_dir(cwd)]
+        .into_iter()
+        .flatten()
+        .filter(|d| d.exists())
+        .collect();
 
     for old in &sessions[max_sessions..] {
         for dir in &dirs {

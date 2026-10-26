@@ -28,6 +28,40 @@ impl Default for WelcomeInfo {
     }
 }
 
+pub fn init_file_for_provider(provider: &str) -> &'static str {
+    if provider == "anthropic" {
+        "CLAUDE.md"
+    } else {
+        "CCX.md"
+    }
+}
+
+pub fn getting_started_tips(provider: &str, auth_source: &str) -> Vec<String> {
+    let auth_tip = match (provider, auth_source) {
+        ("anthropic", "Not authenticated") => " Run /login or add an API key",
+        ("anthropic", source) if source.starts_with("Claude ") => {
+            " Run /login again if access expires"
+        }
+        ("anthropic", _) => " Run /login to use Claude auth",
+        ("openrouter", _) => " OpenRouter sessions use API keys",
+        ("openai", _) => " OpenAI sessions use API keys",
+        _ => " Switch providers with /model",
+    };
+
+    vec![
+        " Type a message to start coding".to_string(),
+        format!(
+            " Run /init to create a {}",
+            init_file_for_provider(provider)
+        ),
+        auth_tip.to_string(),
+        " Use /model to switch providers".to_string(),
+        " Type /help for all commands".to_string(),
+        " Press Tab after / to autocomplete".to_string(),
+        " Ctrl+C to quit".to_string(),
+    ]
+}
+
 /// Render the welcome screen into the given area.
 pub fn render_welcome(frame: &mut Frame, area: Rect, info: &WelcomeInfo) {
     // Split into left (60%) and right (40%) panels.
@@ -35,7 +69,7 @@ pub fn render_welcome(frame: &mut Frame, area: Rect, info: &WelcomeInfo) {
         Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)]).split(area);
 
     render_left_panel(frame, panels[0], info);
-    render_right_panel(frame, panels[1], &info.provider);
+    render_right_panel(frame, panels[1], &info.provider, &info.auth_source);
 }
 
 fn render_left_panel(frame: &mut Frame, area: Rect, info: &WelcomeInfo) {
@@ -103,7 +137,7 @@ fn render_left_panel(frame: &mut Frame, area: Rect, info: &WelcomeInfo) {
     frame.render_widget(paragraph, inner);
 }
 
-fn render_right_panel(frame: &mut Frame, area: Rect, provider: &str) {
+fn render_right_panel(frame: &mut Frame, area: Rect, provider: &str, auth_source: &str) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Theme::border());
@@ -111,37 +145,26 @@ fn render_right_panel(frame: &mut Frame, area: Rect, provider: &str) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let init_file = if provider == "anthropic" { "CLAUDE.md" } else { "CCX.md" };
     let sep_width = inner.width.saturating_sub(2) as usize;
-    let lines = vec![
+    let mut lines = vec![
         Line::from(""),
         Line::from(Span::styled(
             " Tips for getting started",
             Theme::panel_heading(),
         )),
-        Line::from(Span::styled(
-            " Type a message to start coding",
-            Theme::panel_body(),
-        )),
-        Line::from(Span::styled(
-            format!(" Run /init to create a {init_file}"),
-            Theme::panel_body(),
-        )),
-        Line::from(Span::styled(
-            " Type /help for all commands",
-            Theme::panel_body(),
-        )),
-        Line::from(Span::styled(
-            " Press Tab after / for autocomplete",
-            Theme::panel_body(),
-        )),
-        Line::from(Span::styled(" Ctrl+C to quit", Theme::panel_body())),
+    ];
+    lines.extend(
+        getting_started_tips(provider, auth_source)
+            .into_iter()
+            .map(|tip| Line::from(Span::styled(tip, Theme::panel_body()))),
+    );
+    lines.extend([
         Line::from(""),
         Line::from(Span::styled("─".repeat(sep_width), Theme::separator())),
         Line::from(""),
         Line::from(Span::styled(" Recent activity", Theme::panel_heading())),
         Line::from(Span::styled(" No recent activity", Theme::panel_body())),
-    ];
+    ]);
 
     let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
     frame.render_widget(paragraph, inner);
@@ -156,5 +179,26 @@ mod tests {
         let info = WelcomeInfo::default();
         assert_eq!(info.model, "claude-sonnet-4-6");
         assert_eq!(info.tool_count, 11);
+    }
+
+    #[test]
+    fn test_tips_for_claude_subscription() {
+        let tips = getting_started_tips("anthropic", "Claude Max");
+        assert!(tips.iter().any(|tip| tip.contains("CLAUDE.md")));
+        assert!(tips.iter().any(|tip| tip.contains("access expires")));
+    }
+
+    #[test]
+    fn test_tips_for_unauthenticated_session() {
+        let tips = getting_started_tips("anthropic", "Not authenticated");
+        assert!(tips.iter().any(|tip| tip.contains("/login")));
+        assert!(tips.iter().any(|tip| tip.contains("API key")));
+    }
+
+    #[test]
+    fn test_tips_for_openrouter_session() {
+        let tips = getting_started_tips("openrouter", "OpenRouter");
+        assert!(tips.iter().any(|tip| tip.contains("CCX.md")));
+        assert!(tips.iter().any(|tip| tip.contains("API keys")));
     }
 }

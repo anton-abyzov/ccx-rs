@@ -19,6 +19,8 @@ const BG_GRAY: &str = "\x1b[48;2;60;60;60m"; // slightly lighter background for 
 const RED: &str = "\x1b[38;2;255;100;100m"; // bright red — visible on dark
 const WHITE: &str = "\x1b[38;2;220;220;220m"; // bright white for main text
 
+use crate::welcome::getting_started_tips;
+
 /// Terminal width, defaulting to 80 if unknown.
 pub fn term_width() -> usize {
     crossterm::terminal::size()
@@ -59,6 +61,38 @@ fn pad_to(s: &str, target: usize) -> String {
     } else {
         format!("{}{}", s, " ".repeat(target - vis))
     }
+}
+
+fn wrap_plain_line(s: &str, width: usize) -> Vec<String> {
+    if width == 0 || s.chars().count() <= width {
+        return vec![s.to_string()];
+    }
+
+    let indent = s.chars().take_while(|c| c.is_whitespace()).count();
+    let prefix = " ".repeat(indent);
+    let mut lines = Vec::new();
+    let mut current = prefix.clone();
+
+    for word in s.trim_start().split_whitespace() {
+        let candidate = if current.trim().is_empty() {
+            format!("{prefix}{word}")
+        } else {
+            format!("{current} {word}")
+        };
+
+        if candidate.chars().count() <= width || current.trim().is_empty() {
+            current = candidate;
+        } else {
+            lines.push(current);
+            current = format!("{prefix}{word}");
+        }
+    }
+
+    if !current.is_empty() {
+        lines.push(current);
+    }
+
+    lines
 }
 
 /// Render the welcome panel with two-column layout.
@@ -141,32 +175,28 @@ pub fn render_welcome_with_provider(
     }
     left_lines.push(format!("  {DIM}{cwd}{RESET}"));
     left_lines.push(format!("  {DIM}Tools: {tools}{RESET}"));
-    left_lines.push(format!(
-        "  {DIM}\u{26a1} Permissions: bypassed{RESET}"
-    ));
+    left_lines.push(format!("  {DIM}\u{26a1} Permissions: bypassed{RESET}"));
     left_lines.push(format!(
         "  {DIM}(--permission-mode default for prompts){RESET}"
     ));
     left_lines.push(String::new());
 
-    // Right panel content (provider-aware tips).
-    let init_file = if provider == "anthropic" { "CLAUDE.md" } else { "CCX.md" };
     let sep = "─".repeat(right_w.saturating_sub(2));
-    let right_lines: Vec<String> = vec![
+    let mut right_lines: Vec<String> = vec![
         String::new(),
         format!("{ACCENT_BOLD} Tips for getting started{RESET}"),
-        " Type a message to start coding".to_string(),
-        format!(" Run /init to create a {init_file}"),
-        " Type /help for commands".to_string(),
-        " Press Tab after / for autocomplete".to_string(),
-        " Ctrl+C to quit".to_string(),
+    ];
+    for tip in getting_started_tips(provider, auth_source) {
+        right_lines.extend(wrap_plain_line(&tip, right_w));
+    }
+    right_lines.extend([
         format!(" {DIM}{sep}{RESET}"),
         format!("{ACCENT_BOLD} Recent activity{RESET}"),
         format!(" {DIM}No recent activity{RESET}"),
         String::new(),
         String::new(),
         String::new(),
-    ];
+    ]);
 
     // Print rows with border characters.
     let rows = left_lines.len().max(right_lines.len());
@@ -260,7 +290,11 @@ pub fn render_text(text: &str) {
 pub fn render_thinking_block(text: &str) {
     let lines: Vec<&str> = text.lines().collect();
     let preview = if lines.len() > 3 {
-        format!("{}... (+{} more lines)", lines[..3].join(" "), lines.len() - 3)
+        format!(
+            "{}... (+{} more lines)",
+            lines[..3].join(" "),
+            lines.len() - 3
+        )
     } else {
         lines.join(" ")
     };
@@ -576,6 +610,13 @@ mod tests {
         assert_eq!(pad_to("hi", 5), "hi   ");
         assert_eq!(pad_to("hello", 3), "hello");
         assert_eq!(pad_to("\x1b[32mhi\x1b[0m", 5), "\x1b[32mhi\x1b[0m   ");
+    }
+
+    #[test]
+    fn test_wrap_plain_line_preserves_indent() {
+        let wrapped = wrap_plain_line(" Press Tab after / to autocomplete", 20);
+        assert_eq!(wrapped.len(), 2);
+        assert!(wrapped.iter().all(|line| line.starts_with(' ')));
     }
 
     #[test]

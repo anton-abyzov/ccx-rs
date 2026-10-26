@@ -40,8 +40,10 @@ impl CostTracker {
         let input_cost = self.total_input_tokens as f64 * input_price / 1_000_000.0;
         let output_cost = self.total_output_tokens as f64 * output_price / 1_000_000.0;
         // Cache pricing scales relative to base input price.
-        let cache_write_cost = self.total_cache_creation_tokens as f64 * (input_price * 1.25) / 1_000_000.0;
-        let cache_read_cost = self.total_cache_read_tokens as f64 * (input_price * 0.1) / 1_000_000.0;
+        let cache_write_cost =
+            self.total_cache_creation_tokens as f64 * (input_price * 1.25) / 1_000_000.0;
+        let cache_read_cost =
+            self.total_cache_read_tokens as f64 * (input_price * 0.1) / 1_000_000.0;
         input_cost + output_cost + cache_write_cost + cache_read_cost
     }
 
