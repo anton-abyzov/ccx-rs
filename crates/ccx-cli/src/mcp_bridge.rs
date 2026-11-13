@@ -125,7 +125,11 @@ pub async fn register_mcp_tools(
 
     for (name, server) in &config.mcp_servers {
         // Check if the MCP server command exists before attempting to spawn it.
-        let cmd_name = server.command.split('/').next_back().unwrap_or(&server.command);
+        let cmd_name = server
+            .command
+            .split('/')
+            .next_back()
+            .unwrap_or(&server.command);
         let cmd_exists = std::process::Command::new("which")
             .arg(&server.command)
             .stdout(std::process::Stdio::null())

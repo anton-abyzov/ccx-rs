@@ -73,7 +73,10 @@ impl Completer for CcxCompleter {
         // If more skills were hidden, add a hint
         if skill_count > 10 {
             matches.push(Pair {
-                display: format!("[+{} more skills — keep typing to filter]", skill_count - 10),
+                display: format!(
+                    "[+{} more skills — keep typing to filter]",
+                    skill_count - 10
+                ),
                 replacement: line.to_string(),
             });
         }

@@ -39,9 +39,9 @@ pub struct RetryConfig {
 impl Default for RetryConfig {
     fn default() -> Self {
         Self {
-            max_retries: 10,       // More retries — soft rate limits (x-should-retry) are common
-            base_delay_ms: 200,    // Start fast (200ms, not 1s)
-            max_delay_ms: 30_000,  // Cap at 30s, not 60s
+            max_retries: 10,      // More retries — soft rate limits (x-should-retry) are common
+            base_delay_ms: 200,   // Start fast (200ms, not 1s)
+            max_delay_ms: 30_000, // Cap at 30s, not 60s
         }
     }
 }
@@ -391,8 +391,7 @@ impl AgentLoop {
                     }
 
                     // Fire PreTool hooks.
-                    let pre_hooks =
-                        self.hook_registry.matching(HookEvent::PreTool, Some(&name));
+                    let pre_hooks = self.hook_registry.matching(HookEvent::PreTool, Some(&name));
                     for hook in &pre_hooks {
                         debug!("Running PreTool hook for {}: {}", name, hook.command);
                         match run_hook(hook, &self.context.working_dir).await {
@@ -431,8 +430,9 @@ impl AgentLoop {
                 // Phase 3: Collect results, fire PostTool hooks, and fire callbacks.
                 for ((id, name, _), result) in approved.into_iter().zip(exec_results) {
                     // Fire PostTool hooks.
-                    let post_hooks =
-                        self.hook_registry.matching(HookEvent::PostTool, Some(&name));
+                    let post_hooks = self
+                        .hook_registry
+                        .matching(HookEvent::PostTool, Some(&name));
                     for hook in &post_hooks {
                         debug!("Running PostTool hook for {}: {}", name, hook.command);
                         match run_hook(hook, &self.context.working_dir).await {

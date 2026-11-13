@@ -960,10 +960,7 @@ mod tests {
         let converted = convert_messages(&messages, None);
         assert_eq!(converted.len(), 1);
         assert_eq!(converted[0].role, "assistant");
-        assert_eq!(
-            converted[0].content.as_deref(),
-            Some("The answer is 42.")
-        );
+        assert_eq!(converted[0].content.as_deref(), Some("The answer is 42."));
         assert!(converted[0].tool_calls.is_none());
     }
 

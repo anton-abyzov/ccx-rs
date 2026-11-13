@@ -129,8 +129,16 @@ async fn run_process_agent(
 
     // If background mode and tmux is available, spawn in a new pane.
     if run_in_background && std::env::var("TMUX").is_ok() {
-        return spawn_tmux_agent(&ccx_bin, prompt, &api_key, &model, provider, ctx, description)
-            .await;
+        return spawn_tmux_agent(
+            &ccx_bin,
+            prompt,
+            &api_key,
+            &model,
+            provider,
+            ctx,
+            description,
+        )
+        .await;
     }
 
     // Background mode without tmux: spawn async and return agent ID.
@@ -342,9 +350,7 @@ async fn run_inprocess_agent(
         "openrouter" => {
             ccx_api::ApiClient::OpenAi(ccx_api::OpenAiClient::openrouter(&api_key, &model))
         }
-        "openai" => {
-            ccx_api::ApiClient::OpenAi(ccx_api::OpenAiClient::openai(&api_key, &model))
-        }
+        "openai" => ccx_api::ApiClient::OpenAi(ccx_api::OpenAiClient::openai(&api_key, &model)),
         _ => ccx_api::ApiClient::Claude(ccx_api::ClaudeClient::new(&api_key, &model)),
     };
 
